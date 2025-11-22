@@ -44,8 +44,8 @@ struct CompressedTextureBlock : IDifferentiable
 // This represents the 2-partition compressed parameters.
 struct CompressedTextureBlock2P : IDifferentiable
 {
-    float3 ep0, ep1; // partition 1
-    float3 ep2, ep3; // partition 2
+    no_diff float3 ep0, ep1; // partition 1
+    no_diff float3 ep2, ep3; // partition 2
     
     no_diff NonDifferentiableWeights weights; // we don't have to gradient descent on this since we can do a full solve
     
@@ -105,9 +105,139 @@ void optim_weights(inout CompressedTextureBlock block, TextureBlock groundtruth)
     }
 }
 
+struct Means
+{
+    float3 mean;
+    int count;
+};
+
+void calc_partition_means(
+    TextureBlock groundtruth, 
+    float partition_logits[16], 
+    out Means s0, 
+    out Means s1)
+{
+    float3 sum0 = float3(0.0);
+    float3 sum1 = float3(0.0);
+    s0.count = 0;
+    s1.count = 0;
+
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        float3 px = groundtruth.pixels[i];
+        if (partition_logits[i] <= 0.0) { sum0 += px; s0.count++; }
+        else                            { sum1 += px; s1.count++; }
+    }
+
+    s0.mean = s0.count > 0 ? sum0 / float(s0.count) : float3(0.0);
+    s1.mean = s1.count > 0 ? sum1 / float(s1.count) : float3(0.0);
+}
+
+void calc_partition_covariances(
+    TextureBlock groundtruth, 
+    float partition_logits[16], 
+    Means s0, 
+    Means s1,
+    out float3x3 cov0, 
+    out float3x3 cov1)
+{
+    cov0 = float3x3(0.0);
+    cov1 = float3x3(0.0);
+
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        float3 px = groundtruth.pixels[i];
+        if (partition_logits[i] <= 0.0)
+        {
+            float3 d = px - s0.mean;
+            // Accumulate Outer Product: d * d^T
+            cov0[0] += d * d.x; cov0[1] += d * d.y; cov0[2] += d * d.z;
+        }
+        else
+        {
+            float3 d = px - s1.mean;
+            cov1[0] += d * d.x; cov1[1] += d * d.y; cov1[2] += d * d.z;
+        }
+    }
+}
+
+void calc_projection_bounds(
+    TextureBlock groundtruth,
+    float partition_logits[16],
+    Means s0, Means s1,
+    float3 axis0, float3 axis1,
+    out float2 bounds0, // x=min, y=max
+    out float2 bounds1)
+{
+    bounds0 = s0.count > 0 ? float2(1e9, -1e9) : float2(0, 0);
+    bounds1 = s1.count > 0 ? float2(1e9, -1e9) : float2(0, 0);
+
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        float3 px = groundtruth.pixels[i];
+        if (partition_logits[i] <= 0.0)
+        {
+            float t = dot(px - s0.mean, axis0);
+            bounds0.x = min(bounds0.x, t);
+            bounds0.y = max(bounds0.y, t);
+        }
+        else
+        {
+            float t = dot(px - s1.mean, axis1);
+            bounds1.x = min(bounds1.x, t);
+            bounds1.y = max(bounds1.y, t);
+        }
+    }
+}
+
+// Standard Power Iteration to find the dominant eigenvector
+float3 get_principal_axis(float3x3 covariance)
+{
+    float3 dir = float3(1.0, 1.0, 1.0);
+    [unroll]
+    for (int i = 0; i < 2; i++)
+    {
+        float3 next_dir = mul(covariance, dir);
+        if (dot(next_dir, next_dir) < 1e-10)
+        {
+            return normalize(dir);
+        }
+        dir = normalize(next_dir);
+    }
+    return dir;
+}
+
+void get_partition_endpoints(inout CompressedTextureBlock2P block, TextureBlock groundtruth)
+{
+    Means s0, s1;
+    calc_partition_means(groundtruth, block.partition_logits, s0, s1);
+
+    float3x3 cov0, cov1;
+    calc_partition_covariances(groundtruth, block.partition_logits, s0, s1, cov0, cov1);
+
+    float3 axis0 = (s0.count > 1) ? get_principal_axis(cov0) : normalize(block.ep1 - block.ep0 + 1e-6);
+    float3 axis1 = (s1.count > 1) ? get_principal_axis(cov1) : normalize(block.ep3 - block.ep2 + 1e-6);
+
+    float2 bounds0, bounds1;
+    calc_projection_bounds(groundtruth, block.partition_logits, s0, s1, axis0, axis1, bounds0, bounds1);
+
+    if (s0.count > 0) {
+        block.ep0 = s0.mean + axis0 * bounds0.x;
+        block.ep1 = s0.mean + axis0 * bounds0.y;
+    }
+    if (s1.count > 0) {
+        block.ep2 = s1.mean + axis1 * bounds1.x;
+        block.ep3 = s1.mean + axis1 * bounds1.y;
+    }
+}
+
 // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
 // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
 void optim_weights_2P(inout CompressedTextureBlock2P block, TextureBlock groundtruth) {
+    get_partition_endpoints(block, groundtruth);
     float3 D1 = block.ep1 - block.ep0;
     float3 D2 = block.ep3 - block.ep2;
     for (int i = 0; i < 16; i++)
@@ -123,7 +253,7 @@ void optim_weights_2P(inout CompressedTextureBlock2P block, TextureBlock groundt
             D = D2;
         }
 
-        float w = dot(P, D2) / (dot(D2, D2) + 1e-6f); // Add epsilon for safety
+        float w = dot(P, D) / (dot(D, D) + 1e-6f); // Add epsilon for safety
         block.weights[i] = saturate(w);
     }
 }
@@ -170,7 +300,7 @@ void snap(inout CompressedTextureBlock2P block, float snap_strength)
     // Snap our partition logits into the final mask
     for (int i = 0; i < 16; i++)
     {
-        float logit = clamp(snap_strength * abs(block.partition_logits[i]), 0, 1);
+        float logit = abs(block.partition_logits[i]);
         if (((final_mask >> i) & 1) == 0) logit = -logit;
         block.partition_logits[i] = logit;
     }
@@ -332,7 +462,7 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint steps = g_compress_step_params[0].steps;
     uint snap_steps = g_compress_step_params[0].snap_steps;
     uint first_snap_step = uint(steps) / 2;
-    uint checkpoint = steps / 20;
+    uint checkpoint = max(1, steps / 20);
     int step;
 
     for (step = 0; step < int(steps); step++)
@@ -341,19 +471,16 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
         bwd_diff(loss_2P)(groundtruth, cb_pair, 1.0f);
         CompressedTextureBlock2P.Differential gradient = cb_pair.d;
 
-        value.ep0 = clamp(value.ep0 - gradient.ep0 * lr, 0.0f, 1.0f);
-        value.ep1 = clamp(value.ep1 - gradient.ep1 * lr, 0.0f, 1.0f);
-        value.ep2 = clamp(value.ep2 - gradient.ep2 * lr, 0.0f, 1.0f);
-        value.ep3 = clamp(value.ep3 - gradient.ep3 * lr, 0.0f, 1.0f);
         for (int i = 0; i < 16; i++)
         {
             value.partition_logits[i] = (value.partition_logits[i] - gradient.partition_logits[i] * lr);
         }
 
         if (step > first_snap_step && step % snap_steps == 0) {
-            snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
+            // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
         }
         
+        snap(value, 1);
         optim_weights_2P(value, groundtruth);
 
         if (step % checkpoint == 0) {
@@ -363,8 +490,9 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
-    snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
-    optim_weights_2P(value, groundtruth);
+    // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
+    // snap(value, 1);
+    // optim_weights_2P(value, groundtruth);
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock2P[blockIdx] = value;
