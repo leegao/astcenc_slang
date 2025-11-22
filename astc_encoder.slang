@@ -19,6 +19,8 @@ struct Diagnostics
     uint2 optim_ended_clock;
     uint2 finished_clock;
     uint2 timestamps[20];
+    uint partition_hamming_error_log[20];
+    uint ideal_partition_log[20];
 };
 
 // Frozen weights (to avoid generating expensive derivatives in the bkw pass)
@@ -347,15 +349,15 @@ TextureBlock decompress(CompressedTextureBlock blockCoefficients)
 TextureBlock decompress2P(CompressedTextureBlock2P blockCoefficients)
 {
     // Quantize colors
-    float3 ep0 = (blockCoefficients.ep0);
-    float3 ep1 = (blockCoefficients.ep1);
-    float3 ep2 = (blockCoefficients.ep2);
-    float3 ep3 = (blockCoefficients.ep3);
+    float3 ep0 = detach(blockCoefficients.ep0);
+    float3 ep1 = detach(blockCoefficients.ep1);
+    float3 ep2 = detach(blockCoefficients.ep2);
+    float3 ep3 = detach(blockCoefficients.ep3);
 
     TextureBlock outputBlock;
     for (int i = 0; i < 16; i++)
     {
-        float w = saturate(blockCoefficients.weights[i]);
+        float w = saturate(detach(blockCoefficients.weights[i]));
         float p_soft = sigmoid(blockCoefficients.partition_logits[i]);
         float p = round_ste(p_soft); // partition selector
 
@@ -395,14 +397,25 @@ float loss_2P(
     CompressedTextureBlock2P compressed)
 {
     TextureBlock reconstructed = decompress2P(compressed);
+    float3x3 ycocg_proj = float3x3(
+         0.25, 0.50,  0.25,
+         0.50, 0.00, -0.50,
+        -0.25, 0.50, -0.25
+    );
     
     float totalError = 0.0f;
     
     for (int i = 0; i < 16; i++)
     {
         float3 diff = reconstructed.pixels[i] - groundtruth.pixels[i];
+        // diff = mul(ycocg_proj, diff) * float3(1, 1.5, 1); // YCoCg
         totalError += dot(diff, diff); // L2 error
     }
+
+    // Push colors away from each other
+    // totalError -= dot(compressed.ep0 - compressed.ep2, compressed.ep0 - compressed.ep2);
+    // totalError -= dot(compressed.ep1 - compressed.ep3, compressed.ep1 - compressed.ep3);
+    // totalError -= dot(compressed.ep1 - compressed.ep2, compressed.ep1 - compressed.ep2);
     
     return totalError;
 }
@@ -480,19 +493,29 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
             // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
         }
         
-        snap(value, 1);
+        // snap(value, 1);
         optim_weights_2P(value, groundtruth);
 
         if (step % checkpoint == 0) {
             uint iter = step / checkpoint;
             g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
             g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
+
+            uint raw_map = pack_logits_to_mask(value.partition_logits);
+            uint closest_seed = g_lut_ideal_to_seed[raw_map];
+            uint final_mask = g_lut_seed_to_mask[closest_seed];
+
+            // block.astc_seed = closest_seed;
+            // block.astc_partition_map = final_mask;
+            // block.ideal_partition_map = raw_map;
+            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance(raw_map, final_mask);
+            g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
         }
     }
 
     // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
-    // snap(value, 1);
-    // optim_weights_2P(value, groundtruth);
+    snap(value, 1);
+    optim_weights_2P(value, groundtruth);
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock2P[blockIdx] = value;

@@ -116,7 +116,9 @@ def main(args):
         ('start_clock', (np.uint64, 1)), # optim_ended_clock, finished_clock
         ('optim_ended_clock', (np.uint64, 1)),
         ('finished_clock', (np.uint64, 1)),
-        ('timestamps', (np.uint64, 20))
+        ('timestamps', (np.uint64, 20)),
+        ('partition_hamming_error_log', (np.uint32, 20)),
+        ('ideal_partition_log', (np.uint32, 20)),
     ])
     
     comp_block_dtype_1P = np.dtype([
@@ -221,6 +223,9 @@ def main(args):
     print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 1000000:.2f} ms over {num_blocks} threads")
     for i, loss in enumerate(loss_log.mean(0)):
         print(f"Step {i * (args.m // 20)}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
+        if args.use_2p:
+            print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
+            print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:016b}")
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 1000000:.5f} ms / {(finished - optim_ended).min() / 1000000:.5f} ms / {(finished - optim_ended).max() / 1000000:.5f} ms")

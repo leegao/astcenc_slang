@@ -21,6 +21,8 @@ struct Diagnostics_0
     uvec2 optim_ended_clock_0;
     uvec2 finished_clock_0;
     uvec2  timestamps_0[20];
+    uint  partition_hamming_error_log_0[20];
+    uint  ideal_partition_log_0[20];
 };
 
 layout(std430, binding = 2) buffer StructuredBuffer_Diagnostics_t_0 {
@@ -640,6 +642,8 @@ struct Diagnostics_0
     uvec2 optim_ended_clock_0;
     uvec2 finished_clock_0;
     uvec2  timestamps_0[20];
+    uint  partition_hamming_error_log_0[20];
+    uint  ideal_partition_log_0[20];
 };
 
 layout(std430, binding = 2) buffer StructuredBuffer_Diagnostics_t_0 {
@@ -1720,30 +1724,44 @@ void main()
             i_10 = i_10 + 1;
         }
         uint _S164 = uint(step_0);
+        bool _S165;
         if(_S164 > _S160)
         {
-            uint _S165 = _S164 % _S159;
+            uint _S166 = _S164 % _S159;
+            _S165 = _S166 == 0U;
         }
-        snap_0(value_0, 1.0);
+        else
+        {
+            _S165 = false;
+        }
+        if(_S165)
+        {
+            snap_0(value_0, 1.0 + float(_S164 - _S160) / float(_S159 * 2U));
+        }
         optim_weights_2P_0(value_0, blockIdx_0);
-        uint _S166 = _S164 % _S161;
-        if(_S166 == 0U)
+        uint _S167 = _S164 % _S161;
+        if(_S167 == 0U)
         {
             uint iter_0 = _S164 / _S161;
-            uvec2 _S167 = (clockRealtime2x32EXT());
-            g_diagnostics_0._data[uint(blockIdx_0)].timestamps_0[iter_0] = _S167;
+            uvec2 _S168 = (clockRealtime2x32EXT());
+            g_diagnostics_0._data[uint(blockIdx_0)].timestamps_0[iter_0] = _S168;
             g_diagnostics_0._data[uint(blockIdx_0)].loss_log_0[iter_0] = loss_2P_0(blockIdx_0, value_0);
+            uint raw_map_2 = pack_logits_to_mask_0(value_0.partition_logits_0);
+            g_diagnostics_0._data[uint(blockIdx_0)].partition_hamming_error_log_0[iter_0] = uint(hamming_distance_0(raw_map_2, g_lut_seed_to_mask_0._data[uint(g_lut_ideal_to_seed_0._data[uint(raw_map_2)])]));
+            g_diagnostics_0._data[uint(blockIdx_0)].ideal_partition_log_0[iter_0] = raw_map_2;
         }
         step_0 = step_0 + 1;
     }
-    uvec2 _S168 = (clockRealtime2x32EXT());
-    g_diagnostics_0._data[uint(blockIdx_0)].optim_ended_clock_0 = _S168;
+    snap_0(value_0, 1.0);
+    optim_weights_2P_0(value_0, blockIdx_0);
+    uvec2 _S169 = (clockRealtime2x32EXT());
+    g_diagnostics_0._data[uint(blockIdx_0)].optim_ended_clock_0 = _S169;
     g_compressedBlock2P_0._data[uint(blockIdx_0)] = value_0;
     g_reconstructed_0._data[uint(blockIdx_0)] = decompress2P_0(value_0);
     g_diagnostics_0._data[uint(blockIdx_0)].partition_hamming_error_0 = uint(hamming_distance_0(value_0.ideal_partition_map_0, value_0.astc_partition_map_0));
     g_final_loss_0._data[uint(blockIdx_0)] = loss_2P_0(blockIdx_0, value_0);
-    uvec2 _S169 = (clockRealtime2x32EXT());
-    g_diagnostics_0._data[uint(blockIdx_0)].finished_clock_0 = _S169;
+    uvec2 _S170 = (clockRealtime2x32EXT());
+    g_diagnostics_0._data[uint(blockIdx_0)].finished_clock_0 = _S170;
     return;
 }
 
