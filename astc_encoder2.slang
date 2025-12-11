@@ -76,6 +76,34 @@ RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
 StructuredBuffer<uint> g_lut_seed_to_mask;   // 1024-entry (4KB)
 
+public struct PCG32
+{
+    uint state;
+
+    public __init(uint seed)
+    {
+        this.state = seed * 747796405u + 2891336453u;
+        this.state = ((this.state >> ((this.state >> 28u) + 4u)) ^ this.state) * 277803737u;
+        this.state = (this.state >> 22u) ^ this.state;
+    }
+
+    [mutating]
+    public float nextFloat()
+    {
+        uint result = this.nextUint();
+        return asfloat(0x3F800000u | (result >> 9)) - 1.0f;
+    }
+
+    [mutating]
+    public uint nextUint()
+    {
+        uint oldState = this.state;
+        this.state = oldState * 747796405u + 2891336453u;
+        uint word = ((oldState >> ((oldState >> 28u) + 4u)) ^ oldState) * 277803737u;
+        return (word >> 22u) ^ word;
+    }
+}
+
 // Check if a color is closer to the first line (ep1-ep0) or the second
 bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
 {
@@ -99,6 +127,12 @@ bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
 
 
 // Snap the partition map within a 2P block into a valid astc partition seed
+// Note: snapping actually introduces a local minimum problem for most greedy
+// optimization strategies. In cases where you have 1-2 / 16 pixels with a 3rd
+// color, and those 1-2 pixels cannot be selected into the ideal partition because
+// there are no valid astc patterns for the given ep set that will assign those
+// pixels to the right partition, then the only thing our optimizer can do
+// is to compute this weird weighted avg color for the block instead.
 void snap(inout CompressedTextureBlock2P block)
 {
     uint raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
@@ -114,7 +148,7 @@ void snap(inout CompressedTextureBlock2P block)
     {
         float logit = abs(block.partition_logits[i]);
         if (((final_mask >> i) & 1) == 0) logit = -logit;
-        block.partition_logits[i] = logit;
+        block.partition_logits[i] = logit; // Comment this out to see what happens w/o snapping
     }
 }
 
@@ -218,6 +252,13 @@ float loss_2P(
     return totalError;
 }
 
+float dist(float3 x, float3 ep0, float3 ep1)
+{
+    float3 lineDir = ep1 - ep0;
+    float3 pointVec = x - ep0;
+    return length(cross(pointVec, lineDir)) / length(lineDir);
+}
+
 // [require(spvShaderClockKHR)]
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -234,6 +275,31 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
     uint first_snap_step = uint(steps * 9 / 10);
     uint checkpoint = max(1, steps / 20);
     int step;
+    int i;
+
+    // Pick 4 random pairs of endpoints
+    var prng = PCG32(0);
+    value.ep0 = groundtruth.pixels[prng.nextUint() % 16];
+    value.ep1 = groundtruth.pixels[prng.nextUint() % 16];
+    for (i = 0; i < 8; i++) {
+        value.ep1 = groundtruth.pixels[prng.nextUint() % 16];
+        float3 d = value.ep1 - value.ep0;
+        if (dot(d, d) > 0.3) {
+            break;
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        value.ep2 = groundtruth.pixels[prng.nextUint() % 16];
+        if (dist(value.ep2, value.ep0, value.ep1) > 0.3) {
+            break;
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        value.ep3 = groundtruth.pixels[prng.nextUint() % 16];
+        if (dist(value.ep3, value.ep0, value.ep1) > 0.3) {
+            break;
+        }
+    }
 
     for (step = 0; step < int(steps); step++)
     {
