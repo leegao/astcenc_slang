@@ -113,7 +113,7 @@ void snap(inout CompressedTextureBlock2P block)
     {
         float logit = abs(block.partition_logits[i]);
         if (((final_mask >> i) & 1) == 0) logit = -logit;
-        // block.partition_logits[i] = logit;
+        block.partition_logits[i] = logit;
     }
 }
 
