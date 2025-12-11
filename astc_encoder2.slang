@@ -97,6 +97,7 @@ bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
     return (areaSq1 * lenSqD2) < (areaSq2 * lenSqD1);
 }
 
+
 // Snap the partition map within a 2P block into a valid astc partition seed
 void snap(inout CompressedTextureBlock2P block)
 {
@@ -122,9 +123,17 @@ void snap(inout CompressedTextureBlock2P block)
 void one_step_opt(inout CompressedTextureBlock2P block, TextureBlock groundtruth, bool should_snap) {
     float3 D1 = block.ep1 - block.ep0;
     float3 D2 = block.ep3 - block.ep2;
+
+    // Fast partitioning method for partition determination
+    // float3 c0 = (block.ep0 + block.ep1) * 0.5;
+    // float3 c1 = (block.ep2 + block.ep3) * 0.5;
+    // float3 N = c1 - c0; 
+    // float K = dot(N, (c0 + c1) * 0.5);
+
     for (int i = 0; i < 16; i++)
     {
         bool p1 = is_partition_1(groundtruth.pixels[i], block.ep0, block.ep1, block.ep2, block.ep3);
+        // bool p1 = dot(groundtruth.pixels[i], N) > K;
         if (p1) {
             block.partition_logits[i] = -0.5;
         } else {
