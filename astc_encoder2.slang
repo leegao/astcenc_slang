@@ -113,7 +113,7 @@ void snap(inout CompressedTextureBlock2P block)
     {
         float logit = abs(block.partition_logits[i]);
         if (((final_mask >> i) & 1) == 0) logit = -logit;
-        block.partition_logits[i] = logit;
+        // block.partition_logits[i] = logit;
     }
 }
 
@@ -232,10 +232,10 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
         bwd_diff(loss_2P)(groundtruth, cb_pair, 1.0f);
         CompressedTextureBlock2P.Differential gradient = cb_pair.d;
 
-        value.ep0 = value.ep0 - gradient.ep0 * lr;
-        value.ep1 = value.ep1 - gradient.ep1 * lr;
-        value.ep2 = value.ep2 - gradient.ep2 * lr;
-        value.ep3 = value.ep3 - gradient.ep3 * lr;
+        value.ep0 = clamp((value.ep0 - gradient.ep0 * lr), 0.0f, 1.0f);
+        value.ep1 = clamp((value.ep1 - gradient.ep1 * lr), 0.0f, 1.0f);
+        value.ep2 = clamp((value.ep2 - gradient.ep2 * lr), 0.0f, 1.0f);
+        value.ep3 = clamp((value.ep3 - gradient.ep3 * lr), 0.0f, 1.0f);
         one_step_opt(value, groundtruth, step > first_snap_step || step >= steps - 1);
 
         if (step % checkpoint == 0) {
