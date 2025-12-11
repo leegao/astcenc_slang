@@ -100,13 +100,13 @@ def main(args):
     compress_program = device.load_program("astc_encoder.slang", ["compress_step"])
     compress_kernel = device.create_compute_kernel(compress_program)
 
-    compress_2P_program = device.load_program("astc_encoder.slang", ["compress_2P_step"])
+    compress_2P_program = device.load_program("astc_encoder2.slang", ["compress_2P_step"])
     compress_2P_kernel = device.create_compute_kernel(compress_2P_program)
 
     get_loss_program = device.load_program("astc_encoder.slang", ["get_loss"])
     get_loss_kernel = device.create_compute_kernel(get_loss_program)
 
-    get_loss_2P_program = device.load_program("astc_encoder.slang", ["get_loss_2P"])
+    get_loss_2P_program = device.load_program("astc_encoder2.slang", ["get_loss_2P"])
     get_loss_2P_kernel = device.create_compute_kernel(get_loss_2P_program)
     
     texture_block_dtype = np.dtype([('pixels', (np.float32, (16, 3)))])
