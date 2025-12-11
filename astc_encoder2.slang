@@ -100,7 +100,7 @@ bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
 // Snap the partition map within a 2P block into a valid astc partition seed
 void snap(inout CompressedTextureBlock2P block)
 {
-    uint raw_map = pack_logits_to_mask(block.partition_logits.data);
+    uint raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
     uint closest_seed = g_lut_ideal_to_seed[raw_map];
     uint final_mask = g_lut_seed_to_mask[closest_seed];
 
@@ -128,7 +128,7 @@ void one_step_opt(inout CompressedTextureBlock2P block, TextureBlock groundtruth
         if (p1) {
             block.partition_logits[i] = -0.5;
         } else {
-            block.partition_logits[i] = +0.5;
+            block.partition_logits[i] = 0.5;
         }
         if (should_snap) {
             snap(block);
@@ -145,12 +145,12 @@ void one_step_opt(inout CompressedTextureBlock2P block, TextureBlock groundtruth
 }
 
 // Transform the partition_logits to a uint16 partition map (index into the astc partition LUT)
-uint pack_logits_to_mask(float p_logits[16])
+uint pack_partition_indices_to_mask(float p_logits[16])
 {
     uint raw_map = 0;
     for (int i = 0; i < 16; i++)
     {
-        if (p_logits[i] > 0.0)
+        if (p_logits[i] > 0)
         {
             raw_map |= (1 << i);
         }
@@ -172,26 +172,6 @@ int hamming_distance(uint n1, uint n2)
     return output;
 }
 
-
-[Differentiable]
-float sigmoid(float x)
-{
-    return 1.0 / (1.0 + exp(-x));
-}
-
-void round_bwd(inout DifferentialPair<float> x, float d_out)
-{
-    // Pretend round() is the identity y=x for the STE
-    // dLoss/dx = dLoss/d_out * (d_out / dx) = d_out * 1.0
-    x = diffPair(x.p, d_out);
-}
-
-[BackwardDerivative(round_bwd)]
-float round_ste(float x)
-{
-    return round(x);
-}
-
 [Differentiable]
 TextureBlock decompress2P(CompressedTextureBlock2P blockCoefficients)
 {
@@ -203,15 +183,11 @@ TextureBlock decompress2P(CompressedTextureBlock2P blockCoefficients)
     TextureBlock outputBlock;
     for (int i = 0; i < 16; i++)
     {
-        float w = saturate(detach(blockCoefficients.weights[i]));
-        float p_soft = sigmoid(detach(blockCoefficients.partition_logits[i]));
-        float p = round_ste(p_soft); // partition selector
-
-        float3 color1 = lerp(ep0, ep1, w);
-        float3 color2 = lerp(ep2, ep3, w);
-
-        // Blend the two partition colors using the partition selector.
-        outputBlock.pixels[i] = lerp(color1, color2, p);
+        float w = detach(blockCoefficients.weights[i]);
+        bool p1 = detach(blockCoefficients.partition_logits[i]) <= 0;
+        float3 e0 = p1 ? ep0 : ep2;
+        float3 e1 = p1 ? ep1 : ep3;
+        outputBlock.pixels[i] = lerp(e0, e1, w);
     }
     return outputBlock;
 }
@@ -229,11 +205,6 @@ float loss_2P(
         float3 diff = reconstructed.pixels[i] - groundtruth.pixels[i];
         totalError += dot(diff, diff); // L2 error
     }
-
-    // Push colors away from each other
-    // totalError -= 0.0033 * dot(compressed.ep0 - compressed.ep2, compressed.ep0 - compressed.ep2);
-    // totalError -= 0.0033 * dot(compressed.ep1 - compressed.ep3, compressed.ep1 - compressed.ep3);
-    // totalError -= 0.0033 * dot(compressed.ep1 - compressed.ep2, compressed.ep1 - compressed.ep2);
     
     return totalError;
 }
@@ -251,8 +222,7 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
     TextureBlock groundtruth = g_groundtruth[blockIdx];
     float lr = g_compress_step_params[0].learning_rate;
     uint steps = g_compress_step_params[0].steps;
-    uint snap_steps = g_compress_step_params[0].snap_steps;
-    uint first_snap_step = uint(steps * 8 / 10);
+    uint first_snap_step = uint(steps * 9 / 10);
     uint checkpoint = max(1, steps / 20);
     int step;
 
@@ -266,16 +236,14 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
         value.ep1 = value.ep1 - gradient.ep1 * lr;
         value.ep2 = value.ep2 - gradient.ep2 * lr;
         value.ep3 = value.ep3 - gradient.ep3 * lr;
-        
-        bool should_snap = step > first_snap_step;
-        one_step_opt(value, groundtruth, should_snap);
+        one_step_opt(value, groundtruth, step > first_snap_step || step >= steps - 1);
 
         if (step % checkpoint == 0) {
             uint iter = step / checkpoint;
             g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
             g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
 
-            uint raw_map = pack_logits_to_mask(value.partition_logits.data);
+            uint raw_map = pack_partition_indices_to_mask(value.partition_logits.data);
             uint closest_seed = g_lut_ideal_to_seed[raw_map];
             uint final_mask = g_lut_seed_to_mask[closest_seed];
 
@@ -283,8 +251,6 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
             g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
         }
     }
-
-    one_step_opt(value, groundtruth, true);
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock2P[blockIdx] = value;

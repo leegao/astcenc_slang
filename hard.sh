@@ -1,0 +1,1 @@
+uv run python astc_encoder.py -o reconstructed_test_2p.png --use_2p --m 1000 test_rgb_hard_1.png
