@@ -49,7 +49,7 @@ It seems like the only way forward is to do (hard) bruteforce combinatorial sear
 
 **3 Partitions, no-snapping, just partition pattern**:
 
-![reconstructed_test_2p.png](reconstructed_test_2p.png)
+![reconstructed_test_3p.png](reconstructed_test_3p.png)
 
 ## Ideas:
 
