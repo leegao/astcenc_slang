@@ -103,6 +103,9 @@ def main(args):
     compress_2P_program = device.load_program("astc_encoder2.slang", ["compress_2P_step"])
     compress_2P_kernel = device.create_compute_kernel(compress_2P_program)
 
+    compress_3P_program = device.load_program("astc_encoder3.slang", ["compress_3P_step"])
+    compress_3P_kernel = device.create_compute_kernel(compress_3P_program)
+
     get_loss_program = device.load_program("astc_encoder.slang", ["get_loss"])
     get_loss_kernel = device.create_compute_kernel(get_loss_program)
 
@@ -137,11 +140,23 @@ def main(args):
         ('astc_seed', np.uint32),
     ])
 
+    comp_block_dtype_3P = np.dtype([
+        ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
+        ('ep2', (np.float32, 3)), ('ep3', (np.float32, 3)),
+        ('ep4', (np.float32, 3)), ('ep5', (np.float32, 3)),
+        ('weights', (np.float32, 16)),
+        ('partition_logits', (np.float32, 16)),
+        ('astc_partition_map', np.uint32),
+        ('ideal_partition_map', np.uint32),
+        ('astc_seed', np.uint32),
+    ])
+
     params_dtype = np.dtype([
         ('learning_rate', np.float32),
         ('steps', np.uint32),
         ('snap_steps', np.uint32),
         ('num_blocks', np.uint32),
+        ('snap', np.uint32),
     ])
 
     reflection = compress_kernel.reflection
@@ -169,8 +184,22 @@ def main(args):
         usage=spy.BufferUsage.unordered_access, data=initial_params_2p_struct.view(np.float32)
     )
 
+    initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
+    initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['ep1'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['ep2'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['ep3'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['ep4'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['ep5'] = np.random.rand(num_blocks, 3)
+    initial_params_3p_struct['weights'] = np.random.rand(num_blocks, 16)
+    initial_params_3p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) * 2) # Center around 1
+    compressed_3P_buffer = device.create_buffer(
+        element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_compressedBlock3P,
+        usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.float32)
+    )
+
     compress_params_data = np.array(
-        [(args.lr, args.m, args.m / 10 if args.snap_steps == 0 else args.snap_steps, num_blocks)],
+        [(args.lr, args.m, args.m / 10 if args.snap_steps == 0 else args.snap_steps, num_blocks, 0 if args.no_snap else 1)],
         dtype=params_dtype
     )
     compress_params_buffer = device.create_buffer(
@@ -201,6 +230,7 @@ def main(args):
         "g_groundtruth": groundtruth_buffer,
         "g_compressedBlock": compressed_buffer,
         "g_compressedBlock2P": compressed_2P_buffer,
+        "g_compressedBlock3P": compressed_3P_buffer,
         "g_compress_step_params": compress_params_buffer,
         "g_final_loss": final_loss_buffer,
         "g_reconstructed": final_reconstructed_buffer,
@@ -212,9 +242,10 @@ def main(args):
 
     grid = (num_blocks, 1, 1)
     kernel_to_run = compress_2P_kernel if args.use_2p else compress_kernel
-    loss_kernel_to_run = get_loss_2P_kernel if args.use_2p else get_loss_kernel
-    
-    print(f"\n--- Starting {2 if args.use_2p else 1}-Partition Compression ---")
+    if args.use_3p:
+        kernel_to_run = compress_3P_kernel
+
+    print(f"\n--- Starting {2 if args.use_2p else (3 if args.use_3p else 1)}-Partition Compression ---")
     print(f"Running gradient descent for {args.m} steps")
     wall_start = time.time()
     kernel_to_run.dispatch(grid, vars=dispatch_vars)
@@ -227,9 +258,9 @@ def main(args):
     print(f"  Wall clock: {wall_end - wall_start}")
     for i, loss in enumerate(loss_log.mean(0)):
         print(f"Step {i * (args.m // 20)}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
-        if args.use_2p:
+        if args.use_2p or args.use_3p:
             print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
-            print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:016b}")
+            print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
@@ -238,6 +269,9 @@ def main(args):
         astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']
     final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
+
+    # for i in range(len(diagnostics['ideal_partition_log'])):
+    #     print(i, diagnostics['ideal_partition_log'][i][19])
 
     reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)
@@ -248,9 +282,12 @@ if __name__ == "__main__":
     parser.add_argument("input", type=str, help="Path to the input image file.")
     parser.add_argument("-o", "--output", type=str, default="reconstructed.png", help="Path to save the reconstructed output image.")
     parser.add_argument("--use_2p", action="store_true", help="Use the 2-partition compressor instead of the default 1-partition.")
+    parser.add_argument("--use_3p", action="store_true", help="Use the 3-partition compressor instead of the default 1-partition.")
     parser.add_argument("--lr", type=float, default=0.1, help="Learning rate for gradient descent.")
     parser.add_argument("--m", type=int, default=100, help="Number of gradient descent steps per dispatch.")
     parser.add_argument("--snap_steps", type=int, default=0, help="Frequency of snapping partitions to valid ASTC maps (for 2P mode).")
+    parser.add_argument("--no_snap", action="store_true", help="Don't snap to astc valid patterns")
+
 
     args = parser.parse_args()
     main(args)

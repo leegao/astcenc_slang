@@ -34,10 +34,11 @@ struct NonDifferentiableWeights {
 }
 
 // The ASTC/BC encoder problem (single-partition) is to solve for
-struct CompressedTextureBlock2P : IDifferentiable
+struct CompressedTextureBlock3P : IDifferentiable
 {
     float3 ep0, ep1; // partition 1
     float3 ep2, ep3; // partition 2
+    float3 ep4, ep5; // partition 2
     
     no_diff NonDifferentiableWeights weights; // we don't have to gradient descent on this since we can do a full solve
     no_diff NonDifferentiableWeights partition_logits; // Partition blend logits
@@ -65,7 +66,7 @@ RWStructuredBuffer<TextureBlock> g_reconstructed;
 RWStructuredBuffer<Diagnostics> g_diagnostics;
 
 // The ASTC/BC compressed block parameters for the 2-partition problem (ep0,ep1,ep2,ep3, 16x weights, 16x partition logits)
-RWStructuredBuffer<CompressedTextureBlock2P> g_compressedBlock2P;
+RWStructuredBuffer<CompressedTextureBlock3P> g_compressedBlock3P;
 
 // The loss of the encoded block
 RWStructuredBuffer<float> g_final_loss;
@@ -79,16 +80,12 @@ StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
 
 struct LUT
 {
-    uint lut2[1024]; 
+    uint lut2[1024];
+    uint lut3[1024];
 };
 ConstantBuffer<LUT> g_lut;   // 1024-entry (4KB)
 
-// groupshared uint s_lut2[1024];
-
-#define LUT2_LOOKUP g_lut.lut2
-// #define LUT2_LOOKUP g_lut_seed_to_mask
-// #define LUT2_LOOKUP g_static_lut2
-// #define LUT2_LOOKUP s_lut2
+#define LUT3_LOOKUP g_lut.lut3
 
 public struct PCG32
 {
@@ -118,47 +115,23 @@ public struct PCG32
     }
 }
 
+float dist(float3 x, float3 ep0, float3 ep1)
+{
+    float3 lineDir = ep1 - ep0;
+    float3 pointVec = x - ep0;
+    return length(cross(pointVec, lineDir)) / length(lineDir);
+}
+
 // Check if a color is closer to the first line (ep1-ep0) or the second
-bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
+int get_partition(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3, float3 ep4, float3 ep5)
 {
-    float3 d1 = ep1 - ep0;
-    float3 d2 = ep3 - ep2;
+    float d1 = dist(x, ep0, ep1);
+    float d2 = dist(x, ep2, ep3);
+    float d3 = dist(x, ep4, ep5);
 
-    float3 r1 = x - ep0;
-    float3 r2 = x - ep2;
-
-    float lenSqD1 = dot(d1, d1);
-    float lenSqD2 = dot(d2, d2);
-
-    float3 c1 = cross(r1, d1);
-    float3 c2 = cross(r2, d2);
-
-    float areaSq1 = dot(c1, c1);
-    float areaSq2 = dot(c2, c2);
-
-    return (areaSq1 * lenSqD2) < (areaSq2 * lenSqD1);
-}
-
-uint get_mask(uint seed_mask) 
-{
-    // (2b)(2b)... -> bbbb
-    uint result = 0;
-    for (int i = 0; i < 16; i++)
-    {
-        if (((seed_mask >> (2*i)) & 3) == 1) result |= 1 << i;
-    }
-    return result;
-}
-
-uint expand_mask(uint bit_mask)
-{
-    // bbbb -> (2b)(2b)(2b)(2b)
-    uint result = 0;
-    for (int i = 0; i < 16; i++)
-    {
-        if (((bit_mask >> i) & 1) == 1) result |= 1 << (2 * i);
-    }
-    return result;
+    if (d1 < d2 && d1 < d3) return 0;
+    if (d2 < d3) return 1;
+    return 2;
 }
 
 // Used to evaluate the # of incorrect partitions when we snap a block to a valid astc partition seed
@@ -177,22 +150,19 @@ uint hamming_distance_2b(uint x, uint y)
 
 uint get_closest_seed(uint input) {
     // For 3P
-    // uint closest = 0;
-    // uint best_dist = 16;
-    // uint expanded_mask = expand_mask(input);
-
-    // [unroll]
-    // for (int seed = 0; seed < 1024; seed++) {
-    //     uint pattern = LUT2_LOOKUP[seed];
-    //     uint dist = hamming_distance_2b(pattern, expanded_mask);
-    //     // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
-    //     if (dist < best_dist) {
-    //         closest = seed;
-    //         best_dist = dist;
-    //     }
-    // }
-    // return closest;
-    return g_lut_ideal_to_seed[input];
+    uint closest = 0;
+    uint best_dist = 16;
+    [unroll]
+    for (int seed = 0; seed < 1024; seed++) {
+        uint pattern = LUT3_LOOKUP[seed];
+        uint dist = hamming_distance_2b(pattern, input);
+        // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
+        if (dist < best_dist) {
+            closest = seed;
+            best_dist = dist;
+        }
+    }
+    return closest;
 }
 
 // Snap the partition map within a 2P block into a valid astc partition seed
@@ -202,54 +172,42 @@ uint get_closest_seed(uint input) {
 // there are no valid astc patterns for the given ep set that will assign those
 // pixels to the right partition, then the only thing our optimizer can do
 // is to compute this weird weighted avg color for the block instead.
-void snap(inout CompressedTextureBlock2P block)
+void snap(inout CompressedTextureBlock3P block)
 {
     uint raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
     uint closest_seed = get_closest_seed(raw_map);
-    uint final_mask = LUT2_LOOKUP[closest_seed];
+    uint final_mask = LUT3_LOOKUP[closest_seed];
 
     block.astc_seed = closest_seed;
-    block.astc_partition_map = get_mask(final_mask);
+    block.astc_partition_map = final_mask;
     block.ideal_partition_map = raw_map;
 
     // Snap our partition logits into the final mask
     for (int i = 0; i < 16; i++)
     {
-        float logit = abs(block.partition_logits[i]);
-        if (((final_mask >> (2 * i)) & 3) == 0) logit = -logit;
-        block.partition_logits[i] = logit; // Comment this out to see what happens w/o snapping
+        block.partition_logits[i] = ((final_mask >> (2 * i)) & 3); // Comment this out to see what happens w/o snapping
     }
 }
 
 // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
 // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
-void one_step_opt(inout CompressedTextureBlock2P block, TextureBlock groundtruth, bool should_snap) {
+void one_step_opt(inout CompressedTextureBlock3P block, TextureBlock groundtruth, bool should_snap) {
     float3 D1 = block.ep1 - block.ep0;
     float3 D2 = block.ep3 - block.ep2;
-
-    // Fast partitioning method for partition determination
-    // float3 c0 = (block.ep0 + block.ep1) * 0.5;
-    // float3 c1 = (block.ep2 + block.ep3) * 0.5;
-    // float3 N = c1 - c0; 
-    // float K = dot(N, (c0 + c1) * 0.5);
+    float3 D3 = block.ep5 - block.ep4;
 
     for (int i = 0; i < 16; i++)
     {
-        bool p1 = is_partition_1(groundtruth.pixels[i], block.ep0, block.ep1, block.ep2, block.ep3);
-        // bool p1 = dot(groundtruth.pixels[i], N) > K;
-        if (p1) {
-            block.partition_logits[i] = -0.5;
-        } else {
-            block.partition_logits[i] = 0.5;
-        }
+        int partition = get_partition(groundtruth.pixels[i], block.ep0, block.ep1, block.ep2, block.ep3, block.ep4, block.ep5);
+        block.partition_logits[i] = partition;
         if (should_snap) {
             snap(block);
-            p1 = block.partition_logits[i] <= 0;
+            partition = int(block.partition_logits[i]);
         }
 
         float3 C = groundtruth.pixels[i];
-        float3 P = C - (p1 ? block.ep0 : block.ep2);
-        float3 D = p1 ? D1 : D2;
+        float3 P = C - (partition == 0 ? block.ep0 : (partition == 1 ? block.ep2 : block.ep4));
+        float3 D = partition == 0 ? D1 : (partition == 1 ? D2 : D3);
         
         float w = dot(P, D) / (dot(D, D) + 1e-6f); // Add epsilon for safety
         block.weights[i] = saturate(w);
@@ -262,40 +220,40 @@ uint pack_partition_indices_to_mask(float p_logits[16])
     uint raw_map = 0;
     for (int i = 0; i < 16; i++)
     {
-        if (p_logits[i] > 0)
-        {
-            raw_map |= (1 << i);
-        }
+        int logit = clamp(int(round(p_logits[i])), 0, 2);
+        raw_map |= (logit << (i * 2));
     }
     return raw_map;
 }
 
 [Differentiable]
-TextureBlock decompress2P(CompressedTextureBlock2P blockCoefficients)
+TextureBlock decompress3P(CompressedTextureBlock3P blockCoefficients)
 {
     float3 ep0 = blockCoefficients.ep0;
     float3 ep1 = blockCoefficients.ep1;
     float3 ep2 = blockCoefficients.ep2;
     float3 ep3 = blockCoefficients.ep3;
+    float3 ep4 = blockCoefficients.ep4;
+    float3 ep5 = blockCoefficients.ep5;
 
     TextureBlock outputBlock;
     for (int i = 0; i < 16; i++)
     {
         float w = detach(blockCoefficients.weights[i]);
-        bool p1 = detach(blockCoefficients.partition_logits[i]) <= 0;
-        float3 e0 = p1 ? ep0 : ep2;
-        float3 e1 = p1 ? ep1 : ep3;
+        int partition = int(detach(blockCoefficients.partition_logits[i]));
+        float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+        float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
         outputBlock.pixels[i] = lerp(e0, e1, w);
     }
     return outputBlock;
 }
 
 [Differentiable]
-float loss_2P(
+float loss_3P(
     no_diff TextureBlock groundtruth, // frozen
-    CompressedTextureBlock2P compressed)
+    CompressedTextureBlock3P compressed)
 {
-    TextureBlock reconstructed = decompress2P(compressed);
+    TextureBlock reconstructed = decompress3P(compressed);
     float totalError = 0.0f;
     
     for (int i = 0; i < 16; i++)
@@ -307,55 +265,41 @@ float loss_2P(
     return totalError;
 }
 
-float dist(float3 x, float3 ep0, float3 ep1)
-{
-    float3 lineDir = ep1 - ep0;
-    float3 pointVec = x - ep0;
-    return length(cross(pointVec, lineDir)) / length(lineDir);
-}
 
-TextureBlock reconstruct(CompressedTextureBlock2P blockCoefficients, uint blockIdx)
+TextureBlock reconstruct(CompressedTextureBlock3P blockCoefficients, uint blockIdx)
 {
-    TextureBlock outputBlock;
-    // // Just print out the partition pattern
-    // if (blockIdx < 1024) {
-    //     uint mask = LUT2_LOOKUP[blockIdx];
-    //     for (int i = 0; i < 16; i++)
-    //     {
-    //         float index = ((mask >> (i * 2)) & 3);
-    //         outputBlock.pixels[i] = float3(index, index, index);
-    //     }
-    //     return outputBlock;
-    // }
     float3 ep0 = blockCoefficients.ep0;
     float3 ep1 = blockCoefficients.ep1;
     float3 ep2 = blockCoefficients.ep2;
     float3 ep3 = blockCoefficients.ep3;
+    float3 ep4 = blockCoefficients.ep4;
+    float3 ep5 = blockCoefficients.ep5;
 
+    TextureBlock outputBlock;
     for (int i = 0; i < 16; i++)
     {
-        float w = blockCoefficients.weights[i];
-        bool p1 = blockCoefficients.partition_logits[i] <= 0;
-        float3 e0 = p1 ? ep0 : ep2;
-        float3 e1 = p1 ? ep1 : ep3;
-        outputBlock.pixels[i] = lerp(e0, e1, w);
-        // float3 c = p1 ? float3(1,1,1) : (float3(0,0,0));
-        // outputBlock.pixels[i] = c; // lerp(e0, e1, w);
+        float w = 0; // round(detach(blockCoefficients.weights[i]));
+        int partition = clamp(int(detach(blockCoefficients.partition_logits[i])), 0, 2);
+        float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+        float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
+        float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
+        outputBlock.pixels[i] = c; // lerp(e0, e1, w);
     }
     return outputBlock;
+    // return decompress3P(blockCoefficients);
 }
 
 
 // [require(spvShaderClockKHR)]
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
+void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
 {
     uint blockIdx = dispatchThreadID.x;
     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
-    CompressedTextureBlock2P value = g_compressedBlock2P[blockIdx];
+    CompressedTextureBlock3P value = g_compressedBlock3P[blockIdx];
     TextureBlock groundtruth = g_groundtruth[blockIdx];
     float lr = g_compress_step_params[0].learning_rate;
     uint steps = g_compress_step_params[0].steps;
@@ -365,7 +309,7 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     int step;
     int i;
 
-    // Pick 4 random pairs of endpoints
+    // Pick 6 random pairs of endpoints
     var prng = PCG32(0);
     value.ep0 = groundtruth.pixels[prng.nextUint() % 16];
     value.ep1 = groundtruth.pixels[prng.nextUint() % 16];
@@ -388,6 +332,24 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
             break;
         }
     }
+    for (i = 0; i < 8; i++) {
+        value.ep4 = groundtruth.pixels[prng.nextUint() % 16];
+        if (dist(value.ep4, value.ep0, value.ep1) <= 0.3) {
+            continue;
+        }
+        if (dist(value.ep4, value.ep2, value.ep3) > 0.3) {
+            break;
+        }
+    }
+    for (i = 0; i < 8; i++) {
+        value.ep5 = groundtruth.pixels[prng.nextUint() % 16];
+        if (dist(value.ep5, value.ep0, value.ep1) <= 0.3) {
+            continue;
+        }
+        if (dist(value.ep5, value.ep2, value.ep3) > 0.3) {
+            break;
+        }
+    }
 
     // for (i = groupThreadId.x; i < 1024; i += 64)
     // {
@@ -397,43 +359,45 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
 
     for (step = 0; step < int(steps); step++)
     {
-        DifferentialPair<CompressedTextureBlock2P> cb_pair = diffPair(value);
-        bwd_diff(loss_2P)(groundtruth, cb_pair, 1.0f);
-        CompressedTextureBlock2P.Differential gradient = cb_pair.d;
+        DifferentialPair<CompressedTextureBlock3P> cb_pair = diffPair(value);
+        bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
+        CompressedTextureBlock3P.Differential gradient = cb_pair.d;
 
         value.ep0 = clamp((value.ep0 - gradient.ep0 * lr), 0.0f, 1.0f);
         value.ep1 = clamp((value.ep1 - gradient.ep1 * lr), 0.0f, 1.0f);
         value.ep2 = clamp((value.ep2 - gradient.ep2 * lr), 0.0f, 1.0f);
         value.ep3 = clamp((value.ep3 - gradient.ep3 * lr), 0.0f, 1.0f);
+        value.ep4 = clamp((value.ep4 - gradient.ep4 * lr), 0.0f, 1.0f);
+        value.ep5 = clamp((value.ep5 - gradient.ep5 * lr), 0.0f, 1.0f);
         one_step_opt(value, groundtruth, can_snap && (step > first_snap_step || step >= steps - 1));
 
         if (step % checkpoint == 0) {
             uint iter = step / checkpoint;
             g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
-            g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
+            g_diagnostics[blockIdx].loss_log[iter] = loss_3P(groundtruth, value);
 
             uint raw_map = pack_partition_indices_to_mask(value.partition_logits.data);
-            uint closest_seed = get_closest_seed(raw_map); // g_lut_ideal_to_seed[raw_map];
-            uint final_mask = get_mask(LUT2_LOOKUP[closest_seed]);
+            uint closest_seed = get_closest_seed(raw_map);
+            uint final_mask = LUT3_LOOKUP[closest_seed];
 
-            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance(raw_map, final_mask);
+            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance_2b(raw_map, final_mask);
             g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
         }
     }
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
-    g_compressedBlock2P[blockIdx] = value;
+    g_compressedBlock3P[blockIdx] = value;
     g_reconstructed[blockIdx] = reconstruct(value, blockIdx);
-    g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
-    g_final_loss[blockIdx] = loss_2P(groundtruth, value);
+    // g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
+    g_final_loss[blockIdx] = loss_3P(groundtruth, value);
     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void get_loss_2P(uint3 dispatchThreadID : SV_DispatchThreadID)
+void get_loss_3P(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint blockIdx = dispatchThreadID.x;
     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
-    g_final_loss[blockIdx] = loss_2P(g_groundtruth[blockIdx], g_compressedBlock2P[blockIdx]);
+    g_final_loss[blockIdx] = loss_3P(g_groundtruth[blockIdx], g_compressedBlock3P[blockIdx]);
 }

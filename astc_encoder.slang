@@ -64,6 +64,7 @@ struct CompressStepParams
     uint steps;
     uint snap_steps;
     uint num_blocks;
+    uint snap;
 };
 
 // The image to encode (or to compute the loss of)
