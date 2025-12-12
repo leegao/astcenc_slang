@@ -76,7 +76,7 @@ RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 
 // ASTC 2-partition LUT to snap a partition map to a valid astc partition seed
 StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
-StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
+// StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
 
 struct LUT
 {
@@ -113,25 +113,6 @@ public struct PCG32
         uint word = ((oldState >> ((oldState >> 28u) + 4u)) ^ oldState) * 277803737u;
         return (word >> 22u) ^ word;
     }
-}
-
-float dist(float3 x, float3 ep0, float3 ep1)
-{
-    float3 lineDir = ep1 - ep0;
-    float3 pointVec = x - ep0;
-    return length(cross(pointVec, lineDir)) / length(lineDir);
-}
-
-// Check if a color is closer to the first line (ep1-ep0) or the second
-int get_partition(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3, float3 ep4, float3 ep5)
-{
-    float d1 = dist(x, ep0, ep1);
-    float d2 = dist(x, ep2, ep3);
-    float d3 = dist(x, ep4, ep5);
-
-    if (d1 < d2 && d1 < d3) return 0;
-    if (d2 < d3) return 1;
-    return 2;
 }
 
 // Used to evaluate the # of incorrect partitions when we snap a block to a valid astc partition seed
@@ -174,9 +155,9 @@ uint get_closest_seed(uint input) {
 // is to compute this weird weighted avg color for the block instead.
 void snap(inout CompressedTextureBlock3P block)
 {
-    uint raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
-    uint closest_seed = get_closest_seed(raw_map);
-    uint final_mask = LUT3_LOOKUP[closest_seed];
+    var raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
+    var closest_seed = get_closest_seed(raw_map);
+    var final_mask = LUT3_LOOKUP[closest_seed];
 
     block.astc_seed = closest_seed;
     block.astc_partition_map = final_mask;
@@ -189,27 +170,53 @@ void snap(inout CompressedTextureBlock3P block)
     }
 }
 
+float distSq(float3 P, float3 L, float pDotL, float invLenSq)
+{
+    float pDotP = dot(P, P);
+    return pDotP - (pDotL * pDotL * invLenSq);
+}
+
+// Check if a color is closer to the first line (ep1-ep0) or the second
+uint get_partition(float d1, float d2, float d3)
+{
+    if (d1 < d2 && d1 < d3) return 0;
+    if (d2 < d3) return 1;
+    return 2;
+}
+
 // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
 // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
 void one_step_opt(inout CompressedTextureBlock3P block, TextureBlock groundtruth, bool should_snap) {
-    float3 D1 = block.ep1 - block.ep0;
-    float3 D2 = block.ep3 - block.ep2;
-    float3 D3 = block.ep5 - block.ep4;
+    var L1 = block.ep1 - block.ep0;
+    var L2 = block.ep3 - block.ep2;
+    var L3 = block.ep5 - block.ep4;
+    float invLenSq1 = 1.0 / (dot(L1, L1) + 1e-6f);
+    float invLenSq2 = 1.0 / (dot(L2, L2) + 1e-6f);
+    float invLenSq3 = 1.0 / (dot(L3, L3) + 1e-6f);
 
     for (int i = 0; i < 16; i++)
     {
-        int partition = get_partition(groundtruth.pixels[i], block.ep0, block.ep1, block.ep2, block.ep3, block.ep4, block.ep5);
+        var C = groundtruth.pixels[i];
+        var P1 = C - block.ep0;
+        var P2 = C - block.ep2;
+        var P3 = C - block.ep4;
+        var pDotL1 = dot(P1, L1);
+        var pDotL2 = dot(P2, L2);
+        var pDotL3 = dot(P3, L3);
+        var d1 = distSq(P1, L1, pDotL1, invLenSq1);
+        var d2 = distSq(P2, L2, pDotL2, invLenSq2);
+        var d3 = distSq(P3, L3, pDotL3, invLenSq3);
+        var partition = get_partition(d1, d2, d3);
         block.partition_logits[i] = partition;
         if (should_snap) {
             snap(block);
             partition = int(block.partition_logits[i]);
         }
 
-        float3 C = groundtruth.pixels[i];
-        float3 P = C - (partition == 0 ? block.ep0 : (partition == 1 ? block.ep2 : block.ep4));
-        float3 D = partition == 0 ? D1 : (partition == 1 ? D2 : D3);
+        var pDotL = partition == 0 ? pDotL1 : (partition == 1 ? pDotL2 : pDotL3);
+        var invLenSq = partition == 0 ? invLenSq1 : (partition == 1 ? invLenSq2 : invLenSq3);
         
-        float w = dot(P, D) / (dot(D, D) + 1e-6f); // Add epsilon for safety
+        var w = pDotL * invLenSq; // Add epsilon for safety
         block.weights[i] = saturate(w);
     }
 }
@@ -220,7 +227,7 @@ uint pack_partition_indices_to_mask(float p_logits[16])
     uint raw_map = 0;
     for (int i = 0; i < 16; i++)
     {
-        int logit = clamp(int(round(p_logits[i])), 0, 2);
+        uint logit = clamp(round(p_logits[i]), 0, 2);
         raw_map |= (logit << (i * 2));
     }
     return raw_map;
@@ -229,20 +236,20 @@ uint pack_partition_indices_to_mask(float p_logits[16])
 [Differentiable]
 TextureBlock decompress3P(CompressedTextureBlock3P blockCoefficients)
 {
-    float3 ep0 = blockCoefficients.ep0;
-    float3 ep1 = blockCoefficients.ep1;
-    float3 ep2 = blockCoefficients.ep2;
-    float3 ep3 = blockCoefficients.ep3;
-    float3 ep4 = blockCoefficients.ep4;
-    float3 ep5 = blockCoefficients.ep5;
+    var ep0 = blockCoefficients.ep0;
+    var ep1 = blockCoefficients.ep1;
+    var ep2 = blockCoefficients.ep2;
+    var ep3 = blockCoefficients.ep3;
+    var ep4 = blockCoefficients.ep4;
+    var ep5 = blockCoefficients.ep5;
 
     TextureBlock outputBlock;
-    for (int i = 0; i < 16; i++)
+    for (uint i = 0; i < 16; i++)
     {
-        float w = detach(blockCoefficients.weights[i]);
-        int partition = int(detach(blockCoefficients.partition_logits[i]));
-        float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
-        float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
+        var w = detach(blockCoefficients.weights[i]);
+        var partition = int(detach(blockCoefficients.partition_logits[i]));
+        var e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+        var e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
         outputBlock.pixels[i] = lerp(e0, e1, w);
     }
     return outputBlock;
@@ -258,7 +265,7 @@ float loss_3P(
     
     for (int i = 0; i < 16; i++)
     {
-        float3 diff = reconstructed.pixels[i] - groundtruth.pixels[i];
+        var diff = reconstructed.pixels[i] - groundtruth.pixels[i];
         totalError += dot(diff, diff); // L2 error
     }
     
@@ -268,27 +275,33 @@ float loss_3P(
 
 TextureBlock reconstruct(CompressedTextureBlock3P blockCoefficients, uint blockIdx)
 {
-    float3 ep0 = blockCoefficients.ep0;
-    float3 ep1 = blockCoefficients.ep1;
-    float3 ep2 = blockCoefficients.ep2;
-    float3 ep3 = blockCoefficients.ep3;
-    float3 ep4 = blockCoefficients.ep4;
-    float3 ep5 = blockCoefficients.ep5;
+    // float3 ep0 = blockCoefficients.ep0;
+    // float3 ep1 = blockCoefficients.ep1;
+    // float3 ep2 = blockCoefficients.ep2;
+    // float3 ep3 = blockCoefficients.ep3;
+    // float3 ep4 = blockCoefficients.ep4;
+    // float3 ep5 = blockCoefficients.ep5;
 
-    TextureBlock outputBlock;
-    for (int i = 0; i < 16; i++)
-    {
-        float w = 0; // round(detach(blockCoefficients.weights[i]));
-        int partition = clamp(int(detach(blockCoefficients.partition_logits[i])), 0, 2);
-        float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
-        float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
-        float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
-        outputBlock.pixels[i] = c; // lerp(e0, e1, w);
-    }
+    // TextureBlock outputBlock;
+    // for (int i = 0; i < 16; i++)
+    // {
+    //     float w = 0; // round(detach(blockCoefficients.weights[i]));
+    //     int partition = clamp(int(detach(blockCoefficients.partition_logits[i])), 0, 2);
+    //     float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+    //     float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
+    //     float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
+    //     outputBlock.pixels[i] = c; // lerp(e0, e1, w);
+    // }
     // return outputBlock;
     return decompress3P(blockCoefficients);
 }
 
+float dist(float3 x, float3 ep0, float3 ep1)
+{
+    var lineDir = ep1 - ep0;
+    var pointVec = x - ep0;
+    return length(cross(pointVec, lineDir)) / length(lineDir);
+}
 
 // [require(spvShaderClockKHR)]
 [shader("compute")]
@@ -315,7 +328,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     value.ep1 = groundtruth.pixels[prng.nextUint() % 16];
     for (i = 0; i < 8; i++) {
         value.ep1 = groundtruth.pixels[prng.nextUint() % 16];
-        float3 d = value.ep1 - value.ep0;
+        var d = value.ep1 - value.ep0;
         if (dot(d, d) > 0.3) {
             break;
         }
@@ -351,24 +364,18 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
         }
     }
 
-    // for (i = groupThreadId.x; i < 1024; i += 64)
-    // {
-    //     s_lut2[i] = g_lut_seed_to_mask[i];
-    // }
-    // GroupMemoryBarrierWithGroupSync();
-
     for (step = 0; step < int(steps); step++)
     {
         DifferentialPair<CompressedTextureBlock3P> cb_pair = diffPair(value);
         bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
         CompressedTextureBlock3P.Differential gradient = cb_pair.d;
 
-        value.ep0 = clamp((value.ep0 - gradient.ep0 * lr), 0.0f, 1.0f);
-        value.ep1 = clamp((value.ep1 - gradient.ep1 * lr), 0.0f, 1.0f);
-        value.ep2 = clamp((value.ep2 - gradient.ep2 * lr), 0.0f, 1.0f);
-        value.ep3 = clamp((value.ep3 - gradient.ep3 * lr), 0.0f, 1.0f);
-        value.ep4 = clamp((value.ep4 - gradient.ep4 * lr), 0.0f, 1.0f);
-        value.ep5 = clamp((value.ep5 - gradient.ep5 * lr), 0.0f, 1.0f);
+        value.ep0 = saturate(value.ep0 - gradient.ep0 * lr);
+        value.ep1 = saturate(value.ep1 - gradient.ep1 * lr);
+        value.ep2 = saturate(value.ep2 - gradient.ep2 * lr);
+        value.ep3 = saturate(value.ep3 - gradient.ep3 * lr);
+        value.ep4 = saturate(value.ep4 - gradient.ep4 * lr);
+        value.ep5 = saturate(value.ep5 - gradient.ep5 * lr);
         one_step_opt(value, groundtruth, can_snap && (step > first_snap_step || step >= steps - 1));
 
         if (step % checkpoint == 0) {
@@ -388,7 +395,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock3P[blockIdx] = value;
     g_reconstructed[blockIdx] = reconstruct(value, blockIdx);
-    // g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
+    g_diagnostics[blockIdx].partition_hamming_error = hamming_distance_2b(value.ideal_partition_map, value.astc_partition_map);
     g_final_loss[blockIdx] = loss_3P(groundtruth, value);
     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
 }
