@@ -19,6 +19,8 @@ class AstcPartitionLut:
 
         self.lut_ideal_to_seed_np = np.fromfile(self.lut_ideal_to_seed_file, dtype=np.uint16).astype(np.uint32)
         self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint32).astype(np.uint32)
+        self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
+        
         
         print(f"Loaded {len(self.lut_ideal_to_seed_np)} ideal-to-astc-seed entries.")
         print(f"Loaded {len(self.lut_seed_to_mask_np)} astc-seed-to-mask entries.")
@@ -237,7 +239,7 @@ def main(args):
         'g_diagnostics': final_diagnostics_buffer,
         "g_lut_ideal_to_seed": lut_ideal_buffer,
         "g_lut_seed_to_mask": lut_seed_buffer,
-        "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np},
+        "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np, "lut3": astc_lut.lut3},
     }
 
     grid = (num_blocks, 1, 1)
@@ -261,10 +263,21 @@ def main(args):
         if args.use_2p or args.use_3p:
             print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
             print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
+            histogram = [0,0,0,0]
+            for j in range(len(diagnostics['ideal_partition_log'])):
+                partitions = diagnostics['ideal_partition_log'][j][i]
+                seenp = set()
+                for k in range(16):
+                    if args.use_3p:
+                        seenp.add((partitions >> (k * 2)) & 3)
+                    else:
+                        seenp.add((partitions >> k) & 1)
+                histogram[len(seenp) - 1] += 1
+            print(f"  Histogram of partitions used: {histogram}")
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
-    if args.use_2p:
+    if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
         astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']
     final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()

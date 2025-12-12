@@ -285,8 +285,8 @@ TextureBlock reconstruct(CompressedTextureBlock3P blockCoefficients, uint blockI
         float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
         outputBlock.pixels[i] = c; // lerp(e0, e1, w);
     }
-    return outputBlock;
-    // return decompress3P(blockCoefficients);
+    // return outputBlock;
+    return decompress3P(blockCoefficients);
 }
 
 
@@ -304,7 +304,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     float lr = g_compress_step_params[0].learning_rate;
     uint steps = g_compress_step_params[0].steps;
     bool can_snap = g_compress_step_params[0].snap > 0;
-    uint first_snap_step = uint(steps * 0.9);
+    uint first_snap_step = uint(steps * 0.7);
     uint checkpoint = max(1, steps / 20);
     int step;
     int i;
