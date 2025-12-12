@@ -99,20 +99,14 @@ def main(args):
     device = spy.Device(enable_debug_layers=False)
     astc_lut = AstcPartitionLut(device)
 
-    compress_program = device.load_program("astc_encoder.slang", ["compress_step"])
+    compress_program = device.load_program("astc_encoder_soft.slang", ["compress_step"])
     compress_kernel = device.create_compute_kernel(compress_program)
 
-    compress_2P_program = device.load_program("astc_encoder2.slang", ["compress_2P_step"])
+    compress_2P_program = device.load_program("astc_encoder2_soft.slang", ["compress_2P_step"])
     compress_2P_kernel = device.create_compute_kernel(compress_2P_program)
 
-    compress_3P_program = device.load_program("astc_encoder3.slang", ["compress_3P_step"])
+    compress_3P_program = device.load_program("astc_encoder3_soft.slang", ["compress_3P_step"])
     compress_3P_kernel = device.create_compute_kernel(compress_3P_program)
-
-    get_loss_program = device.load_program("astc_encoder.slang", ["get_loss"])
-    get_loss_kernel = device.create_compute_kernel(get_loss_program)
-
-    get_loss_2P_program = device.load_program("astc_encoder2.slang", ["get_loss_2P"])
-    get_loss_2P_kernel = device.create_compute_kernel(get_loss_2P_program)
     
     texture_block_dtype = np.dtype([('pixels', (np.float32, (16, 3)))])
     diagnostics_dtype = np.dtype([
