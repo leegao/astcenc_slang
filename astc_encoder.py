@@ -12,13 +12,13 @@ class AstcPartitionLut:
     def __init__(self, device):
         self.device = device
         self.lut_ideal_to_seed_file = "astc_2p_4x4_lut.bin"
-        self.lut_seed_to_mask_file = "astc_2p_seed_to_mask_lut.bin"
+        self.lut_seed_to_mask_file = "lut2_packed.bin"
         
         if not (Path(self.lut_ideal_to_seed_file).exists() and Path(self.lut_seed_to_mask_file).exists()):
             raise Exception("astc_2p_4x4_lut.bin + astc_2p_seed_to_mask_lut.bin not found")
 
         self.lut_ideal_to_seed_np = np.fromfile(self.lut_ideal_to_seed_file, dtype=np.uint16).astype(np.uint32)
-        self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint16).astype(np.uint32)
+        self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint32).astype(np.uint32)
         
         print(f"Loaded {len(self.lut_ideal_to_seed_np)} ideal-to-astc-seed entries.")
         print(f"Loaded {len(self.lut_seed_to_mask_np)} astc-seed-to-mask entries.")
@@ -207,6 +207,7 @@ def main(args):
         'g_diagnostics': final_diagnostics_buffer,
         "g_lut_ideal_to_seed": lut_ideal_buffer,
         "g_lut_seed_to_mask": lut_seed_buffer,
+        "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np},
     }
 
     grid = (num_blocks, 1, 1)
@@ -215,12 +216,15 @@ def main(args):
     
     print(f"\n--- Starting {2 if args.use_2p else 1}-Partition Compression ---")
     print(f"Running gradient descent for {args.m} steps")
+    wall_start = time.time()
     kernel_to_run.dispatch(grid, vars=dispatch_vars)
     diagnostics = final_diagnostics_buffer.to_numpy().view(diagnostics_dtype)
+    wall_end = time.time()
     loss_log = diagnostics['loss_log']
     timestamps = diagnostics['timestamps']
-    thread_timestamps = (timestamps - diagnostics['start_clock']).T / 1000000
-    print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 1000000:.2f} ms over {num_blocks} threads")
+    thread_timestamps = (timestamps - diagnostics['start_clock']).T / 100000
+    print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 100000:.2f} ms over {num_blocks} threads")
+    print(f"  Wall clock: {wall_end - wall_start}")
     for i, loss in enumerate(loss_log.mean(0)):
         print(f"Step {i * (args.m // 20)}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
         if args.use_2p:
@@ -228,7 +232,7 @@ def main(args):
             print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:016b}")
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
-    print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 1000000:.5f} ms / {(finished - optim_ended).min() / 1000000:.5f} ms / {(finished - optim_ended).max() / 1000000:.5f} ms")
+    print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
     if args.use_2p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
         astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']

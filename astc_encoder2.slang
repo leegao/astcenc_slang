@@ -74,7 +74,20 @@ RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 
 // ASTC 2-partition LUT to snap a partition map to a valid astc partition seed
 StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
-StructuredBuffer<uint> g_lut_seed_to_mask;   // 1024-entry (4KB)
+StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
+
+struct LUT
+{
+    uint lut2[1024]; 
+};
+ConstantBuffer<LUT> g_lut;   // 1024-entry (4KB)
+
+// groupshared uint s_lut2[1024];
+
+#define LUT2_LOOKUP g_lut.lut2
+// #define LUT2_LOOKUP g_lut_seed_to_mask
+// #define LUT2_LOOKUP g_static_lut2
+// #define LUT2_LOOKUP s_lut2
 
 public struct PCG32
 {
@@ -125,6 +138,61 @@ bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
     return (areaSq1 * lenSqD2) < (areaSq2 * lenSqD1);
 }
 
+uint get_mask(uint seed_mask) 
+{
+    // (2b)(2b)... -> bbbb
+    uint result = 0;
+    for (int i = 0; i < 16; i++)
+    {
+        if (((seed_mask >> (2*i)) & 3) == 1) result |= 1 << i;
+    }
+    return result;
+}
+
+uint expand_mask(uint bit_mask)
+{
+    // bbbb -> (2b)(2b)(2b)(2b)
+    uint result = 0;
+    for (int i = 0; i < 16; i++)
+    {
+        if (((bit_mask >> i) & 1) == 1) result |= 1 << (2 * i);
+    }
+    return result;
+}
+
+// Used to evaluate the # of incorrect partitions when we snap a block to a valid astc partition seed
+uint hamming_distance(uint x, uint y)
+{
+    return countbits(x ^ y);
+}
+
+uint hamming_distance_2b(uint x, uint y)
+{
+    uint z = x ^ y;
+    z |= z >> 1;
+    z &= 0x55555555;
+    return countbits(z);
+}
+
+uint get_closest_seed(uint input) {
+    // For 3P
+    // uint closest = 0;
+    // uint best_dist = 16;
+    // uint expanded_mask = expand_mask(input);
+
+    // [unroll]
+    // for (int seed = 0; seed < 1024; seed++) {
+    //     uint pattern = LUT2_LOOKUP[seed];
+    //     uint dist = hamming_distance_2b(pattern, expanded_mask);
+    //     // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
+    //     if (dist < best_dist) {
+    //         closest = seed;
+    //         best_dist = dist;
+    //     }
+    // }
+    // return closest;
+    return g_lut_ideal_to_seed[input];
+}
 
 // Snap the partition map within a 2P block into a valid astc partition seed
 // Note: snapping actually introduces a local minimum problem for most greedy
@@ -136,18 +204,18 @@ bool is_partition_1(float3 x, float3 ep0, float3 ep1, float3 ep2, float3 ep3)
 void snap(inout CompressedTextureBlock2P block)
 {
     uint raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
-    uint closest_seed = g_lut_ideal_to_seed[raw_map];
-    uint final_mask = g_lut_seed_to_mask[closest_seed];
+    uint closest_seed = get_closest_seed(raw_map);
+    uint final_mask = LUT2_LOOKUP[closest_seed];
 
     block.astc_seed = closest_seed;
-    block.astc_partition_map = final_mask;
+    block.astc_partition_map = get_mask(final_mask);
     block.ideal_partition_map = raw_map;
 
     // Snap our partition logits into the final mask
     for (int i = 0; i < 16; i++)
     {
         float logit = abs(block.partition_logits[i]);
-        if (((final_mask >> i) & 1) == 0) logit = -logit;
+        if (((final_mask >> (2 * i)) & 3) == 0) logit = -logit;
         block.partition_logits[i] = logit; // Comment this out to see what happens w/o snapping
     }
 }
@@ -201,20 +269,6 @@ uint pack_partition_indices_to_mask(float p_logits[16])
     return raw_map;
 }
 
-// Used to evaluate the # of incorrect partitions when we snap a block to a valid astc partition seed
-int hamming_distance(uint n1, uint n2)
-{
-    int x = n1 ^ n2;
-    int output = 0;
-
-    while (x > 0) {
-        output += x & 1;
-        x >>= 1;
-    }
-
-    return output;
-}
-
 [Differentiable]
 TextureBlock decompress2P(CompressedTextureBlock2P blockCoefficients)
 {
@@ -259,10 +313,40 @@ float dist(float3 x, float3 ep0, float3 ep1)
     return length(cross(pointVec, lineDir)) / length(lineDir);
 }
 
+TextureBlock reconstruct(CompressedTextureBlock2P blockCoefficients, uint blockIdx)
+{
+    TextureBlock outputBlock;
+    // // Just print out the partition pattern
+    // if (blockIdx < 1024) {
+    //     uint mask = LUT2_LOOKUP[blockIdx];
+    //     for (int i = 0; i < 16; i++)
+    //     {
+    //         float index = ((mask >> (i * 2)) & 3);
+    //         outputBlock.pixels[i] = float3(index, index, index);
+    //     }
+    //     return outputBlock;
+    // }
+    float3 ep0 = blockCoefficients.ep0;
+    float3 ep1 = blockCoefficients.ep1;
+    float3 ep2 = blockCoefficients.ep2;
+    float3 ep3 = blockCoefficients.ep3;
+
+    for (int i = 0; i < 16; i++)
+    {
+        float w = blockCoefficients.weights[i];
+        bool p1 = blockCoefficients.partition_logits[i] <= 0;
+        float3 e0 = p1 ? ep0 : ep2;
+        float3 e1 = p1 ? ep1 : ep3;
+        outputBlock.pixels[i] = lerp(e0, e1, w);
+    }
+    return outputBlock;
+}
+
+
 // [require(spvShaderClockKHR)]
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
+void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
 {
     uint blockIdx = dispatchThreadID.x;
     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
@@ -272,7 +356,7 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
     TextureBlock groundtruth = g_groundtruth[blockIdx];
     float lr = g_compress_step_params[0].learning_rate;
     uint steps = g_compress_step_params[0].steps;
-    uint first_snap_step = uint(steps * 9 / 10);
+    uint first_snap_step = uint(steps * 0.9);
     uint checkpoint = max(1, steps / 20);
     int step;
     int i;
@@ -301,6 +385,12 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
         }
     }
 
+    // for (i = groupThreadId.x; i < 1024; i += 64)
+    // {
+    //     s_lut2[i] = g_lut_seed_to_mask[i];
+    // }
+    // GroupMemoryBarrierWithGroupSync();
+
     for (step = 0; step < int(steps); step++)
     {
         DifferentialPair<CompressedTextureBlock2P> cb_pair = diffPair(value);
@@ -319,8 +409,8 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
             g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
 
             uint raw_map = pack_partition_indices_to_mask(value.partition_logits.data);
-            uint closest_seed = g_lut_ideal_to_seed[raw_map];
-            uint final_mask = g_lut_seed_to_mask[closest_seed];
+            uint closest_seed = get_closest_seed(raw_map); // g_lut_ideal_to_seed[raw_map];
+            uint final_mask = get_mask(LUT2_LOOKUP[closest_seed]);
 
             g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance(raw_map, final_mask);
             g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
@@ -329,7 +419,7 @@ void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock2P[blockIdx] = value;
-    g_reconstructed[blockIdx] = decompress2P(value);
+    g_reconstructed[blockIdx] = reconstruct(value, blockIdx);
     g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
     g_final_loss[blockIdx] = loss_2P(groundtruth, value);
     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
