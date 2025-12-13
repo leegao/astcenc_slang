@@ -103,9 +103,6 @@ def main(args):
     compress_program = device.load_program("astc_encoder_soft.slang", ["compress_step"])
     compress_kernel = device.create_compute_kernel(compress_program)
 
-    compress_2P_program = device.load_program("astc_encoder2_soft.slang", ["compress_2P_step"])
-    compress_2P_kernel = device.create_compute_kernel(compress_2P_program)
-
     compress_3P_program = device.load_program("astc_encoder3_soft.slang", ["compress_3P_step"])
     compress_3P_kernel = device.create_compute_kernel(compress_3P_program)
     
