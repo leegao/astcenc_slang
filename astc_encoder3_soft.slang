@@ -235,7 +235,6 @@ uint2 get_closest_seed(uint input, bool can_permute) {
     uint closest = 0;
     uint best_dist = 16;
     uint best_perm = 0;
-    [unroll]
     for (int seed = 0; seed < 1024; seed++) {
         uint pattern = LUT3_LOOKUP[seed];
         // if (pattern == 0x0 && pattern == 0x55555555 && pattern == 0xaaaaaaaa) continue;

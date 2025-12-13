@@ -481,9 +481,9 @@ Saved reconstructed image to 'reconstructed_test_3p.png'
 ## Ideas:
 
 1. Full soft decoder with autodiff (done - slow convergence)
-2. [2P] Coordinate descent with gradient descent on partition logits (done - poor stability)
-3. [2P] Coordinate descent with gradient descent on the color eps (done - good results, ~but trapped in local minimums~)
-4. [3P] Extend to 3P and 4P depending on # of distinct colors, using a combinatorial search of partition seeds (done, viable for 3P)
+2. [Done] Coordinate descent with gradient descent on partition logits (done - poor stability)
+3. [Done] Coordinate descent with gradient descent on the color eps (done - good results, ~but trapped in local minimums~)
+4. [Done] Extend to 3P and 4P depending on # of distinct colors, using a combinatorial search of partition seeds (done, viable for 3P)
 5. ~Use RANSAC to select partitions, using the inlier count as a statistic to uncover # of distinct color lines~
     * Turns out partition selection isn't the problem, it's astc snapping, and jointly modeling the optimization with that in mind
       is very hard without resorting to combinatorial search
@@ -491,3 +491,5 @@ Saved reconstructed image to 'reconstructed_test_3p.png'
 7. Use PCA to replace the soft differentiable part
 8. Do an ensemble of 1P, 2P, and 3P
 9. Apply quantization
+10. [Done] Apply permutations to available astc patterns to expand the search space
+11. Use a LUT for 3P as well (~80MB)
