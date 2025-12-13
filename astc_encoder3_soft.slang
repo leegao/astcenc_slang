@@ -525,25 +525,25 @@ float loss_3P(
 
 TextureBlock reconstruct(CompressedTextureBlock3P blockCoefficients, uint blockIdx)
 {
-    float3 ep0 = blockCoefficients.ep0;
-    float3 ep1 = blockCoefficients.ep1;
-    float3 ep2 = blockCoefficients.ep2;
-    float3 ep3 = blockCoefficients.ep3;
-    float3 ep4 = blockCoefficients.ep4;
-    float3 ep5 = blockCoefficients.ep5;
+    // float3 ep0 = blockCoefficients.ep0;
+    // float3 ep1 = blockCoefficients.ep1;
+    // float3 ep2 = blockCoefficients.ep2;
+    // float3 ep3 = blockCoefficients.ep3;
+    // float3 ep4 = blockCoefficients.ep4;
+    // float3 ep5 = blockCoefficients.ep5;
 
-    TextureBlock outputBlock;
-    for (int i = 0; i < 16; i++)
-    {
-        float w = 0; // round(detach(blockCoefficients.weights[i]));
-        int partition = clamp(int(detach(blockCoefficients.partition_index[i])), 0, 2);
-        float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
-        float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
-        float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
-        outputBlock.pixels[i] = c; // lerp(e0, e1, w);
-    }
-    return outputBlock;
-    // return decompress3P(blockCoefficients);
+    // TextureBlock outputBlock;
+    // for (int i = 0; i < 16; i++)
+    // {
+    //     float w = 0; // round(detach(blockCoefficients.weights[i]));
+    //     int partition = clamp(int(detach(blockCoefficients.partition_index[i])), 0, 2);
+    //     float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+    //     float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
+    //     float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
+    //     outputBlock.pixels[i] = c; // lerp(e0, e1, w);
+    // }
+    // return outputBlock;
+    return decompress3P(blockCoefficients);
 }
 
 float dist(float3 x, float3 ep0, float3 ep1)
