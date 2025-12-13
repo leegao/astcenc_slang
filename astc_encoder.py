@@ -20,6 +20,7 @@ class AstcPartitionLut:
         self.lut_ideal_to_seed_np = np.fromfile(self.lut_ideal_to_seed_file, dtype=np.uint16).astype(np.uint32)
         self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint32).astype(np.uint32)
         self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
+        self.astc_3p_4x4_lut_s3_np = np.fromfile("astc_3p_4x4_lut_s3.bin", dtype=np.uint32).astype(np.uint32)
         
         
         print(f"Loaded {len(self.lut_ideal_to_seed_np)} ideal-to-astc-seed entries.")
@@ -223,6 +224,13 @@ def main(args):
         reflection.g_lut_ideal_to_seed, reflection.g_lut_seed_to_mask
     )
 
+    astc_3p_4x4_lut_s3_buffer = device.create_buffer(
+        element_count=len(astc_lut.astc_3p_4x4_lut_s3_np),
+        resource_type_layout=compress_3P_kernel.reflection.g_astc_3p_4x4_lut_s3,
+        usage=spy.BufferUsage.shader_resource,
+        data=astc_lut.astc_3p_4x4_lut_s3_np
+    )
+
     dispatch_vars = {
         "g_groundtruth": groundtruth_buffer,
         "g_compressedBlock": compressed_buffer,
@@ -234,6 +242,7 @@ def main(args):
         'g_diagnostics': final_diagnostics_buffer,
         "g_lut_ideal_to_seed": lut_ideal_buffer,
         "g_lut_seed_to_mask": lut_seed_buffer,
+        "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
         "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np, "lut3": astc_lut.lut3},
     }
 
@@ -274,12 +283,16 @@ def main(args):
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
     if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
-        astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']
+        # astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']
     final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
 
     # for i in range(len(diagnostics['ideal_partition_log'])):
     #     print(i, diagnostics['ideal_partition_log'][i][19])
+    # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_partition_map'])
+    # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['ideal_partition_map'])
+    # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
+    # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
 
     reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)

@@ -77,6 +77,7 @@ RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 
 // ASTC 2-partition LUT to snap a partition map to a valid astc partition seed
 StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
+StructuredBuffer<uint> g_astc_3p_4x4_lut_s3; // 2 * 3^14 entries (12.2MB)
 // StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
 
 struct LUT
@@ -169,39 +170,76 @@ uint best_perm_distance(uint x, uint y, out uint perm)
     return best >> 3;
 }
 
-// uint permute_swap01(uint x)
-// {
-//     return x ^ (~(x >> 1) & M5); 
-// }
+uint permute_swap01(uint x)
+{
+    return x ^ (~(x >> 1) & M5);
+}
 
-// uint permute_swap02(uint x)
-// {
-//     return x ^ (~(x << 1) & MA);
-// }
+uint permute_swap02(uint x)
+{
+    return x ^ (~(x << 1) & MA);
+}
 
-// uint permute_swap12(uint x)
-// {
-//     uint non_zero = (x | (x >> 1)) & M5;
-//     uint mask = non_zero | (non_zero << 1);
-//     return x ^ mask;
-// }
+uint permute_swap12(uint x)
+{
+    uint non_zero = (x | (x >> 1)) & M5;
+    uint mask = non_zero | (non_zero << 1);
+    return x ^ mask;
+}
 
-// uint permute_cycle_120(uint x)
-// {
-//     // 0->1, 1->2, 2->0 (Forward)
-//     uint s = x + M5;
-//     uint mask = s & (s >> 1) & M5;
-//     return uint(s & ~(mask | (mask << 1)));
-// }
+uint permute_cycle_120(uint x)
+{
+    // 0->1, 1->2, 2->0 (Forward)
+    uint s = x + M5;
+    uint mask = s & (s >> 1) & M5;
+    return uint(s & ~(mask | (mask << 1)));
+}
 
-// uint permute_cycle_201(uint x)
-// {
-//     // // 0->2, 2->1, 1->0 (Backward)
-//     // uint s = x - M5; // UNDERFLOWS
-//     // uint mask = s & (s >> 1) & M5;
-//     // return s & ~mask;
-//     return permute_cycle_120(permute_cycle_120(x));
-// }
+uint permute_cycle_201(uint x)
+{
+    // // 0->2, 2->1, 1->0 (Backward)
+    // uint s = x - M5; // UNDERFLOWS
+    // uint mask = s & (s >> 1) & M5;
+    // return s & ~mask;
+    return permute_cycle_120(permute_cycle_120(x));
+}
+
+uint lut_key(uint x)
+{
+    // pack into trits, preserve proper endianness
+    uint result = 0;
+    [unroll]
+    for (int i = 15; i >= 0; i--)
+    {
+        result = result * 3 + ((x >> (i*2)) & 3);
+    }
+    return result;
+}
+
+uint canonicalize(uint x)
+{
+    var p0 = lut_key(x);
+    var p1 = lut_key(permute_swap01(x));
+    var p2 = lut_key(permute_swap02(x));
+    var p3 = lut_key(permute_swap12(x));
+    var p4 = lut_key(permute_cycle_120(x));
+    var p5 = lut_key(permute_cycle_201(x));
+
+    uint min01 = min(x, p1);
+    uint min23 = min(p2, p3);
+    uint min45 = min(p4, p5);
+    return min(min01, min(min23, min45));
+}
+
+uint apply_permutation(uint perm, uint x) {
+    if (perm == 0) return x;
+    if (perm == 1) return permute_swap01(x);
+    if (perm == 2) return permute_swap02(x);
+    if (perm == 3) return permute_swap12(x);
+    if (perm == 4) return permute_cycle_120(x);
+    if (perm == 5) return permute_cycle_201(x);
+    return x;
+}
 
 // uint best_perm_distance_slow(uint x, uint y, out uint perm)
 // {
@@ -230,47 +268,37 @@ uint best_perm_distance(uint x, uint y, out uint perm)
 //     return min_dist;
 // }
 
-uint2 get_closest_seed(uint input, bool can_permute) {
+uint2 get_closest_seed(uint input) {
     // For 3P, also consider rotational invariance
-    uint closest = 0;
-    uint best_dist = 16;
-    uint best_perm = 0;
-    for (int seed = 0; seed < 1024; seed++) {
-        uint pattern = LUT3_LOOKUP[seed];
-        // if (pattern == 0x0 && pattern == 0x55555555 && pattern == 0xaaaaaaaa) continue;
-        uint perm = 0;
-        uint dist = can_permute ? best_perm_distance(input, pattern, perm) : hamming_distance_2b(input, pattern);
-        // uint dist = hamming_distance_2b(input, pattern);
-        // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
-        if (dist < best_dist && pattern != 0 && pattern != 0x55555555 && pattern != 0xaaaaaaaa) {
-            closest = seed;
-            best_dist = dist;
-            best_perm = perm;
-        }
-    }
-    return uint2(closest, best_perm);
-}
+    // uint closest = 0;
+    // uint best_dist = 16;
+    // uint best_perm = 0;
+    // for (int seed = 0; seed < 1024; seed++) {
+    //     uint pattern = LUT3_LOOKUP[seed];
+    //     // if (pattern == 0x0 && pattern == 0x55555555 && pattern == 0xaaaaaaaa) continue;
+    //     uint perm = 0;
+    //     uint dist = can_permute ? best_perm_distance(input, pattern, perm) : hamming_distance_2b(input, pattern);
+    //     // uint dist = hamming_distance_2b(input, pattern);
+    //     // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
+    //     if (dist < best_dist && pattern != 0 && pattern != 0x55555555 && pattern != 0xaaaaaaaa) {
+    //         closest = seed;
+    //         best_dist = dist;
+    //         best_perm = perm;
+    //     }
+    // }
+    // return uint2(closest, best_perm);
 
-// void swap_partition(uint perm, inout CompressedTextureBlock3P block) {
-//     [unroll]
-//     for (int i = 0; i < 16; i++) {
-//         float logit = block.partition_logits[i];
-//         if (perm == 1) {
-//             // 01
-//             block.partition_logits[i] = logit == 2 ? 2 : 1 - logit;
-//         } else if (perm == 2) {
-//             // 02
-//             block.partition_logits[i] = logit == 1 ? 1 : 2 - logit;
-//         } else if (perm == 3) {
-//             // 12
-//             block.partition_logits[i] = logit == 0 ? 0 : (logit == 1 ? 2 : 1);
-//         } else if (perm == 4) {
-            
-//         } else if (perm == 5) {
-            
-//         }
-//     }
-// }
+    // First, rotate input to its canonical form
+    // Next, look up the seed in g_astc_3p_4x4_lut_s3 -> // 3, then >> i * 10 & 0x3FF
+    // Next, look up the pattern
+    // Next, find the permutation of input closest to the pattern
+    uint key = canonicalize(input);
+    uint seed = (g_astc_3p_4x4_lut_s3[key / 3] >> ((key % 3) * 10)) & 0x3FF;
+    uint pattern = LUT3_LOOKUP[seed];
+    uint perm = 0;
+    uint dist = best_perm_distance(input, pattern, perm);
+    return uint2(seed, perm);
+}
 
 void swap(uint perm, inout CompressedTextureBlock3P blockCoefficients) {
     // 0: Identity, 1: Swap01, 2: Swap02, 3: Swap12, 4: Cycle(120), 5: Cycle(201)
@@ -280,17 +308,6 @@ void swap(uint perm, inout CompressedTextureBlock3P blockCoefficients) {
     var ep3 = blockCoefficients.ep3;
     var ep4 = blockCoefficients.ep4;
     var ep5 = blockCoefficients.ep5;
-    // swap_partition(perm, blockCoefficients);
-
-    // var M = float3(1,0,1);
-    // if (perm > 5) {
-    //     blockCoefficients.ep0 = M;
-    //     blockCoefficients.ep1 = M;
-    //     blockCoefficients.ep2 = M;
-    //     blockCoefficients.ep3 = M; 
-    //     blockCoefficients.ep4 = M;
-    //     blockCoefficients.ep5 = M; 
-    // } else 
 
     if (perm == 1) {
         // (102)
@@ -336,11 +353,11 @@ void swap(uint perm, inout CompressedTextureBlock3P blockCoefficients) {
 // there are no valid astc patterns for the given ep set that will assign those
 // pixels to the right partition, then the only thing our optimizer can do
 // is to compute this weird weighted avg color for the block instead.
-void snap(inout CompressedTextureBlock3P block, bool can_permute)
+void snap(inout CompressedTextureBlock3P block)
 {
     var raw_map = pack_partition_indices_to_mask(block.partition_logits.data);
     // uint perm = 0;
-    var search = get_closest_seed(raw_map, can_permute);
+    var search = get_closest_seed(raw_map);
     uint closest_seed = search.x;
     uint perm = search.y;
     var final_mask = LUT3_LOOKUP[closest_seed];
@@ -374,7 +391,7 @@ uint get_partition(float d1, float d2, float d3)
 
 // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
 // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
-void one_step_opt(inout CompressedTextureBlock3P block, TextureBlock groundtruth, bool should_snap, bool can_permute) {
+void one_step_opt(inout CompressedTextureBlock3P block, TextureBlock groundtruth, bool should_snap) {
     var L1 = block.ep1 - block.ep0;
     var L2 = block.ep3 - block.ep2;
     var L3 = block.ep5 - block.ep4;
@@ -398,13 +415,13 @@ void one_step_opt(inout CompressedTextureBlock3P block, TextureBlock groundtruth
         block.partition_logits[i] = partition;
     }
     if (should_snap) {
-        snap(block, can_permute);
-            L1 = block.ep1 - block.ep0;
-            L2 = block.ep3 - block.ep2;
-            L3 = block.ep5 - block.ep4;
-            invLenSq1 = 1.0 / (dot(L1, L1) + 1e-6f);
-            invLenSq2 = 1.0 / (dot(L2, L2) + 1e-6f);
-            invLenSq3 = 1.0 / (dot(L3, L3) + 1e-6f);
+        snap(block);
+        L1 = block.ep1 - block.ep0;
+        L2 = block.ep3 - block.ep2;
+        L3 = block.ep5 - block.ep4;
+        invLenSq1 = 1.0 / (dot(L1, L1) + 1e-6f);
+        invLenSq2 = 1.0 / (dot(L2, L2) + 1e-6f);
+        invLenSq3 = 1.0 / (dot(L3, L3) + 1e-6f);
     }
     for (int i = 0; i < 16; i++)
     {
@@ -522,7 +539,6 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     uint steps = g_compress_step_params[0].steps;
     bool can_snap = g_compress_step_params[0].snap > 0;
     uint first_snap_step = uint(steps * 0.8);
-    uint last_permute_step = uint(steps * 0.95);
     uint checkpoint = max(1, steps / 20);
     int step;
     int i;
@@ -581,7 +597,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
         value.ep3 = saturate(value.ep3 - gradient.ep3 * lr);
         value.ep4 = saturate(value.ep4 - gradient.ep4 * lr);
         value.ep5 = saturate(value.ep5 - gradient.ep5 * lr);
-        one_step_opt(value, groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1), step <= last_permute_step);
+        one_step_opt(value, groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));
 
         if (step % checkpoint == 0) {
             uint iter = step / checkpoint;
@@ -589,10 +605,10 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
             g_diagnostics[blockIdx].loss_log[iter] = loss_3P(groundtruth, value);
 
             uint raw_map = pack_partition_indices_to_mask(value.partition_logits.data);
-            uint closest_seed = get_closest_seed(raw_map, false).x;
-            uint final_mask = LUT3_LOOKUP[closest_seed];
-
-            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance_2b(raw_map, final_mask);
+            uint2 closest_seed = get_closest_seed(raw_map);
+            uint final_mask = LUT3_LOOKUP[closest_seed.x];
+            uint perm = 0;
+            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = best_perm_distance(raw_map, final_mask, perm);
             g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
         }
     }
@@ -600,9 +616,16 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
     g_compressedBlock3P[blockIdx] = value;
     g_reconstructed[blockIdx] = reconstruct(value, blockIdx);
-    g_diagnostics[blockIdx].partition_hamming_error = hamming_distance_2b(value.ideal_partition_map, value.astc_partition_map);
+    uint perm = 0;
+    g_diagnostics[blockIdx].partition_hamming_error = best_perm_distance(value.ideal_partition_map, value.astc_partition_map, perm);
     g_final_loss[blockIdx] = loss_3P(groundtruth, value);
     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
+
+    // var raw_map = pack_partition_indices_to_mask(value.partition_logits.data);
+    // uint perm = 0;
+    // var search = get_closest_seed(raw_map);
+    // g_compressedBlock3P[blockIdx].perm = value.astc_partition_map; // LUT3_LOOKUP[search.x]; // g_astc_3p_4x4_lut_s3[blockIdx];
+    // g_compressedBlock3P[blockIdx].perm = apply_permutation(g_compressedBlock3P[blockIdx].perm, value.ideal_partition_map);
 }
 
 [shader("compute")]
