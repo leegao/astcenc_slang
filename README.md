@@ -258,8 +258,6 @@ Saved reconstructed image to 'reconstructed_3p.png'
 
 ![test_rgb_hard_1.png](test_rgb_hard_1.png)
 
-<img src="test_rgb_hard_1.png" alt="test_rgb_hard_1.png" width="1000"/>
-
 **Single Partition**:
 
 ![reconstructed_test_1p.png](reconstructed_test_1p.png)
