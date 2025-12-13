@@ -21,6 +21,7 @@ class AstcPartitionLut:
         self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint32).astype(np.uint32)
         self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
         self.astc_3p_4x4_lut_s3_np = np.fromfile("astc_3p_4x4_lut_s3.bin", dtype=np.uint32).astype(np.uint32)
+        self.astc_2p_4x4_lut_s2_np = np.fromfile("astc_2p_4x4_lut_s2.bin", dtype=np.uint32).astype(np.uint32)
         
         
         print(f"Loaded {len(self.lut_ideal_to_seed_np)} ideal-to-astc-seed entries.")
@@ -239,6 +240,13 @@ def main(args):
         data=astc_lut.astc_3p_4x4_lut_s3_np
     )
 
+    astc_2p_4x4_lut_s2_buffer = device.create_buffer(
+        element_count=len(astc_lut.astc_2p_4x4_lut_s2_np),
+        resource_type_layout=compress_3P_kernel.reflection.g_astc_2p_4x4_lut_s2,
+        usage=spy.BufferUsage.shader_resource,
+        data=astc_lut.astc_2p_4x4_lut_s2_np
+    )
+
     dispatch_vars = {
         "g_groundtruth": groundtruth_buffer,
         "g_compressedBlock": compressed_buffer,
@@ -251,6 +259,7 @@ def main(args):
         "g_lut_ideal_to_seed": lut_ideal_buffer,
         "g_lut_seed_to_mask": lut_seed_buffer,
         "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
+        "g_astc_2p_4x4_lut_s2": astc_2p_4x4_lut_s2_buffer,
         "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np, "lut3": astc_lut.lut3},
     }
 

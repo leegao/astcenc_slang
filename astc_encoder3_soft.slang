@@ -63,9 +63,8 @@ RWStructuredBuffer<float> g_final_loss;
 RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 
 // ASTC 2-partition LUT to snap a partition map to a valid astc partition seed
-StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
+StructuredBuffer<uint> g_astc_2p_4x4_lut_s2; // 2^15 entries (42.7KB)
 StructuredBuffer<uint> g_astc_3p_4x4_lut_s3; // 2 * 3^14 entries (12.2MB)
-// StructuredBuffer<uint> g_lut_seed_to_mask;  // 65536-entry (256KB)
 
 struct LUT
 {
@@ -232,10 +231,29 @@ uint canonicalize_lut3(uint x)
     var p4 = lut3_key(permute_cycle_120(x));
     var p5 = lut3_key(permute_cycle_201(x));
 
-    uint min01 = min(x, p1);
+    uint min01 = min(p0, p1);
     uint min23 = min(p2, p3);
     uint min45 = min(p4, p5);
     return min(min01, min(min23, min45));
+}
+
+uint lut2_key(uint x)
+{
+    // pack into bits, preserve proper endianness
+    uint result = 0;
+    [unroll]
+    for (int i = 15; i >= 0; i--)
+    {
+        result = result * 2 + ((x >> (i*2)) & 3);
+    }
+    return result;
+}
+
+uint canonicalize_lut2(uint x)
+{
+    var p0 = lut2_key(x);
+    var p1 = lut2_key(permute_swap01(x));
+    return min(p0, p1);
 }
 
 uint hamming_distance_2b(uint x, uint y)
@@ -262,41 +280,14 @@ uint get_closest_seed3(uint input, out Permutation perm, out uint final_pattern)
 }
 
 uint get_closest_seed2(uint input, out Permutation permutation, out uint final_pattern) {
-    // TODO: use a S2-quotiented LUT here as well
-    uint closest = 0;
-    uint best_dist = 16;
-    Permutation best_perm = Id;
-    uint best_pattern = 0;
-    for (int seed = 0; seed < 1024; seed++) {
-        uint pattern = LUT2_LOOKUP[seed];
-        // if (pattern == 0x0 && pattern == 0x55555555 && pattern == 0xaaaaaaaa) continue;
-        Permutation perm = Id;
-        uint dist = best_perm_distance_s2(input, pattern, perm);
-        // // if (dist == 0) return seed; // the divergence actually doubles the time somehow
-        if (dist < best_dist && pattern != 0 && pattern != 0x55555555 && pattern != 0xaaaaaaaa) {
-            closest = seed;
-            best_dist = dist;
-            best_perm = perm;
-            best_pattern = pattern;
-        }
-    }
-    permutation = best_perm;
-    final_pattern = best_pattern;
-    return closest;
+    uint key = canonicalize_lut2(input);
+    uint seed = (g_astc_2p_4x4_lut_s2[key / 3] >> ((key % 3) * 10)) & 0x3FF;
+    uint pattern = LUT2_LOOKUP[seed];
+    uint dist = best_perm_distance_s2(input, pattern, permutation);
 
-    // // First, rotate input to its canonical form
-    // // Next, look up the seed in g_astc_3p_4x4_lut_s3 -> // 3, then >> i * 10 & 0x3FF
-    // // Next, look up the pattern
-    // // Next, find the permutation of input closest to the pattern
-    // uint key = canonicalize_lut2(input);
-    // uint seed = (g_astc_2p_4x4_lut_s2[key / 2] >> ((key % 2) * 10)) & 0x3FF;
-    // uint pattern = LUT2_LOOKUP[seed];
-    // uint dist = best_perm_distance_s2(input, pattern, perm);
-
-    // final_pattern = pattern;
-    // return seed;
+    final_pattern = pattern;
+    return seed;
 }
-
 
 // The ASTC/BC encoder problem (single-partition) is to solve for
 struct CompressedTextureBlock3P : IDifferentiable
