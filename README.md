@@ -499,6 +499,6 @@ Final Mean L^2 Loss per block: 0.0431
 8. Do an ensemble of 1P, 2P, and 3P
 9. Apply quantization
 10. [Done] Apply permutations to available astc patterns to expand the search space (for 3P and 2P)
-11. [Done] Use a LUT for 3P as well (~80MB~ 12.2MB using permutation symmetry, plus we have the nice property that $T[\sigma(x)] = \argmin_{s}(\min(dist(\sigma_i(x), p_s))$ is also permutationally invariant, meaning we can quickly explore the full symmetry space during snapping)
+11. [Done] Use a LUT for 3P as well (~80MB~ 12.2MB using permutation symmetry, plus we have the nice property that $T[\sigma(x)] = \mathbf{argmin}_{s}(\min(dist(\sigma_i(x), p_s))$ is also permutationally invariant, meaning we can quickly explore the full symmetry space during snapping)
 12. [Done] Apply the no-1P regularizer to 2P and 3P
-13. Create the symmetric LUT for 2P as well
+13. [Done] Create the symmetric LUT for 2P as well (includes scripts to regenerate these)
