@@ -145,6 +145,7 @@ def main(args):
         ('astc_partition_map', np.uint32),
         ('ideal_partition_map', np.uint32),
         ('astc_seed', np.uint32),
+        ('perm', np.uint32),
     ])
 
     params_dtype = np.dtype([
