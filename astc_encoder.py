@@ -119,6 +119,7 @@ def main(args):
         ('timestamps', (np.uint64, 20)),
         ('partition_hamming_error_log', (np.uint32, 20)),
         ('ideal_partition_log', (np.uint32, 20)),
+        ('partition_count', (np.uint32, 20)),
     ])
     
     comp_block_dtype_1P = np.dtype([
@@ -147,6 +148,8 @@ def main(args):
         ('ideal_partition_map', np.uint32),
         ('astc_seed', np.uint32),
         ('perm', np.uint32),
+        ('partition_count', np.uint32),
+        ('max_partitions', np.uint32),
     ])
 
     params_dtype = np.dtype([
@@ -155,6 +158,7 @@ def main(args):
         ('snap_steps', np.uint32),
         ('num_blocks', np.uint32),
         ('snap', np.uint32),
+        ('max_partitions', np.uint32),
     ])
 
     reflection = compress_kernel.reflection
@@ -197,7 +201,14 @@ def main(args):
     )
 
     compress_params_data = np.array(
-        [(args.lr, args.m, args.m / 10 if args.snap_steps == 0 else args.snap_steps, num_blocks, 0 if args.no_snap else 1)],
+        [(
+            args.lr,
+            args.m,
+            args.m / 10 if args.snap_steps == 0 else args.snap_steps,
+            num_blocks,
+            0 if args.no_snap else 1,
+            3 if args.use_3p else (2 if args.use_2p else 1)
+        )],
         dtype=params_dtype
     )
     compress_params_buffer = device.create_buffer(
@@ -216,7 +227,7 @@ def main(args):
     )
 
     final_diagnostics_buffer = device.create_buffer(
-        element_count=num_blocks, resource_type_layout=reflection.g_diagnostics,
+        element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_diagnostics,
         usage=spy.BufferUsage.unordered_access
     )
 
@@ -247,7 +258,7 @@ def main(args):
     }
 
     grid = (num_blocks, 1, 1)
-    kernel_to_run = compress_2P_kernel if args.use_2p else compress_kernel
+    kernel_to_run = compress_3P_kernel if args.use_2p else compress_kernel
     if args.use_3p:
         kernel_to_run = compress_3P_kernel
 
@@ -268,15 +279,9 @@ def main(args):
             print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
             print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
             histogram = [0,0,0,0]
-            for j in range(len(diagnostics['ideal_partition_log'])):
-                partitions = diagnostics['ideal_partition_log'][j][i]
-                seenp = set()
-                for k in range(16):
-                    if args.use_3p:
-                        seenp.add((partitions >> (k * 2)) & 3)
-                    else:
-                        seenp.add((partitions >> k) & 1)
-                histogram[len(seenp) - 1] += 1
+            partition_count = diagnostics['partition_count']
+            for c in partition_count.T[i]:
+                histogram[c-1] += 1
             print(f"  Histogram of partitions used: {histogram}")
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']

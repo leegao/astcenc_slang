@@ -61,97 +61,97 @@ Saved reconstructed image to 'reconstructed_1p.png'
 
 ![reconstructed_2p.png](reconstructed_2p.png)
 
-~2x time, 3x better quality
+~2x time, 3x better quality~ (need to include 2p LUT as well)
 
 ```
 --- Starting 2-Partition Compression ---
 Running gradient descent for 40 steps
 
-Optimization finished in 85.37 ms over 129600 threads
-  Wall clock: 0.7166867256164551
-Step 0: loss = 0.0415 (0.05 ms/thread mean, 0.03 ms / 0.20 ms)
-  Partition hamming error at step 0: 161330
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [15936, 113664, 0, 0]
-Step 2: loss = 0.0071 (0.11 ms/thread mean, 0.09 ms / 0.46 ms)
-  Partition hamming error at step 1: 159422
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14074, 115526, 0, 0]
-Step 4: loss = 0.0038 (0.17 ms/thread mean, 0.14 ms / 0.70 ms)
-  Partition hamming error at step 2: 156740
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [13964, 115636, 0, 0]
-Step 6: loss = 0.0027 (0.22 ms/thread mean, 0.19 ms / 0.94 ms)
-  Partition hamming error at step 3: 155796
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [13951, 115649, 0, 0]
-Step 8: loss = 0.0022 (0.28 ms/thread mean, 0.24 ms / 1.11 ms)
-  Partition hamming error at step 4: 155249
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14014, 115586, 0, 0]
-Step 10: loss = 0.0020 (0.33 ms/thread mean, 0.29 ms / 1.17 ms)
-  Partition hamming error at step 5: 154857
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14042, 115558, 0, 0]
-Step 12: loss = 0.0019 (0.38 ms/thread mean, 0.34 ms / 1.22 ms)
-  Partition hamming error at step 6: 154643
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14121, 115479, 0, 0]
-Step 14: loss = 0.0018 (0.44 ms/thread mean, 0.40 ms / 1.28 ms)
-  Partition hamming error at step 7: 154747
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14095, 115505, 0, 0]
-Step 16: loss = 0.0018 (0.49 ms/thread mean, 0.45 ms / 1.34 ms)
-  Partition hamming error at step 8: 154545
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14128, 115472, 0, 0]
-Step 18: loss = 0.0017 (0.55 ms/thread mean, 0.50 ms / 1.40 ms)
-  Partition hamming error at step 9: 154496
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14169, 115431, 0, 0]
-Step 20: loss = 0.0017 (0.60 ms/thread mean, 0.55 ms / 1.46 ms)
-  Partition hamming error at step 10: 154462
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14107, 115493, 0, 0]
-Step 22: loss = 0.0017 (0.65 ms/thread mean, 0.61 ms / 1.51 ms)
-  Partition hamming error at step 11: 154383
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14234, 115366, 0, 0]
-Step 24: loss = 0.0017 (0.71 ms/thread mean, 0.66 ms / 1.57 ms)
-  Partition hamming error at step 12: 154424
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14199, 115401, 0, 0]
-Step 26: loss = 0.0017 (0.76 ms/thread mean, 0.71 ms / 1.62 ms)
-  Partition hamming error at step 13: 154437
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14110, 115490, 0, 0]
-Step 28: loss = 0.0017 (0.81 ms/thread mean, 0.76 ms / 1.68 ms)
-  Partition hamming error at step 14: 154463
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14126, 115474, 0, 0]
-Step 30: loss = 0.0017 (0.87 ms/thread mean, 0.81 ms / 1.74 ms)
-  Partition hamming error at step 15: 154461
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14179, 115421, 0, 0]
-Step 32: loss = 0.0017 (0.92 ms/thread mean, 0.86 ms / 1.79 ms)
-  Partition hamming error at step 16: 154514
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14101, 115499, 0, 0]
-Step 34: loss = 0.0017 (0.97 ms/thread mean, 0.91 ms / 1.85 ms)
-  Partition hamming error at step 17: 154617
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14055, 115545, 0, 0]
-Step 36: loss = 0.0017 (1.03 ms/thread mean, 0.96 ms / 1.91 ms)
-  Partition hamming error at step 18: 154590
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [14055, 115545, 0, 0]
-Step 38: loss = 0.0034 (1.12 ms/thread mean, 1.04 ms / 1.99 ms)
+Optimization finished in 323.43 ms over 129600 threads
+  Wall clock: 1.0977962017059326
+Step 0: loss = 0.0412 (0.06 ms/thread mean, 0.04 ms / 0.23 ms)
+  Partition hamming error at step 0: 143622
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [8625, 120975, 0, 0]
+Step 2: loss = 0.0071 (0.23 ms/thread mean, 0.20 ms / 0.79 ms)
+  Partition hamming error at step 1: 141535
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7533, 122067, 0, 0]
+Step 4: loss = 0.0038 (0.40 ms/thread mean, 0.36 ms / 0.96 ms)
+  Partition hamming error at step 2: 139618
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7437, 122163, 0, 0]
+Step 6: loss = 0.0027 (0.56 ms/thread mean, 0.52 ms / 1.13 ms)
+  Partition hamming error at step 3: 138816
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7401, 122199, 0, 0]
+Step 8: loss = 0.0022 (0.73 ms/thread mean, 0.69 ms / 1.31 ms)
+  Partition hamming error at step 4: 138562
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7379, 122221, 0, 0]
+Step 10: loss = 0.0020 (0.90 ms/thread mean, 0.85 ms / 1.49 ms)
+  Partition hamming error at step 5: 138387
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7361, 122239, 0, 0]
+Step 12: loss = 0.0019 (1.07 ms/thread mean, 1.01 ms / 1.68 ms)
+  Partition hamming error at step 6: 138430
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7352, 122248, 0, 0]
+Step 14: loss = 0.0018 (1.24 ms/thread mean, 1.18 ms / 1.87 ms)
+  Partition hamming error at step 7: 138249
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7343, 122257, 0, 0]
+Step 16: loss = 0.0018 (1.40 ms/thread mean, 1.34 ms / 2.07 ms)
+  Partition hamming error at step 8: 138306
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7339, 122261, 0, 0]
+Step 18: loss = 0.0017 (1.57 ms/thread mean, 1.50 ms / 2.28 ms)
+  Partition hamming error at step 9: 138340
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7329, 122271, 0, 0]
+Step 20: loss = 0.0017 (1.74 ms/thread mean, 1.66 ms / 2.49 ms)
+  Partition hamming error at step 10: 138407
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7317, 122283, 0, 0]
+Step 22: loss = 0.0017 (1.91 ms/thread mean, 1.82 ms / 2.70 ms)
+  Partition hamming error at step 11: 138375
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7296, 122304, 0, 0]
+Step 24: loss = 0.0017 (2.09 ms/thread mean, 1.98 ms / 2.92 ms)
+  Partition hamming error at step 12: 138361
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7293, 122307, 0, 0]
+Step 26: loss = 0.0017 (2.25 ms/thread mean, 2.14 ms / 3.09 ms)
+  Partition hamming error at step 13: 138370
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7289, 122311, 0, 0]
+Step 28: loss = 0.0017 (2.42 ms/thread mean, 2.30 ms / 3.27 ms)
+  Partition hamming error at step 14: 138373
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7280, 122320, 0, 0]
+Step 30: loss = 0.0017 (2.59 ms/thread mean, 2.47 ms / 3.46 ms)
+  Partition hamming error at step 15: 138396
+  Mask: 00000000000000000000000000000000
+  Histogram of partitions used: [7275, 122325, 0, 0]
+Step 32: loss = 0.0039 (2.88 ms/thread mean, 2.75 ms / 3.78 ms)
+  Partition hamming error at step 16: 0
+  Mask: 00010101010101010101010101010101
+  Histogram of partitions used: [0, 129600, 0, 0]
+Step 34: loss = 0.0029 (3.30 ms/thread mean, 3.17 ms / 4.24 ms)
+  Partition hamming error at step 17: 0
+  Mask: 00010101010101010101010101010101
+  Histogram of partitions used: [0, 129600, 0, 0]
+Step 36: loss = 0.0025 (3.73 ms/thread mean, 3.58 ms / 4.70 ms)
+  Partition hamming error at step 18: 0
+  Mask: 00000101010101000100000000000001
+  Histogram of partitions used: [0, 129600, 0, 0]
+Step 38: loss = 0.0023 (4.15 ms/thread mean, 3.99 ms / 5.14 ms)
   Partition hamming error at step 19: 0
-  Mask: 00000000000000001111111111111111
-  Histogram of partitions used: [13935, 115665, 0, 0]
- + diagnostics overhead per thread: 0.00584 ms / 0.00352 ms / 0.05568 ms
-Partition hamming error: 0.07543981481481482
-Final Mean L^2 Loss per block: 0.0030
+  Mask: 00000000000000000000000000000101
+  Histogram of partitions used: [0, 129600, 0, 0]
+ + diagnostics overhead per thread: 0.01425 ms / 0.00456 ms / 0.05736 ms
+Partition hamming error: 0.8520293209876543
+Final Mean L^2 Loss per block: 0.0023
 ```
 
 **3 Partitions**:
@@ -296,97 +296,99 @@ Final Mean L^2 Loss per block: 0.4216
 
 ![reconstructed_test_2p_6x.png](reconstructed_test_2p_6x.png)
 
-~2x time, 2x better quality
+~2x time, 2x better quality~ (need to include LUT as well)
+
+Note that with the no-1p regularizer and the symmetry tables, this performs on part with 3p
 
 ```
 --- Starting 2-Partition Compression ---
 Running gradient descent for 40 steps
 
-Optimization finished in 1.83 ms over 1024 threads
-  Wall clock: 0.17380666732788086
-Step 0: loss = 1.7100 (0.18 ms/thread mean, 0.18 ms / 0.18 ms)
-  Partition hamming error at step 0: 687
-  Mask: 00000000000000001011110011001100
-  Histogram of partitions used: [311, 713, 0, 0]
-Step 2: loss = 0.1746 (0.43 ms/thread mean, 0.42 ms / 0.43 ms)
-  Partition hamming error at step 1: 730
-  Mask: 00000000000000001011010111011100
-  Histogram of partitions used: [299, 725, 0, 0]
-Step 4: loss = 0.0814 (0.66 ms/thread mean, 0.65 ms / 0.66 ms)
-  Partition hamming error at step 2: 726
-  Mask: 00000000000000001011010111011000
-  Histogram of partitions used: [296, 728, 0, 0]
-Step 6: loss = 0.0443 (0.86 ms/thread mean, 0.86 ms / 0.86 ms)
-  Partition hamming error at step 3: 730
-  Mask: 00000000000000001010010100011000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 8: loss = 0.0275 (0.91 ms/thread mean, 0.91 ms / 0.91 ms)
-  Partition hamming error at step 4: 723
-  Mask: 00000000000000001010010100010000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 10: loss = 0.0197 (0.96 ms/thread mean, 0.96 ms / 0.97 ms)
-  Partition hamming error at step 5: 722
-  Mask: 00000000000000001010010100010000
-  Histogram of partitions used: [293, 731, 0, 0]
-Step 12: loss = 0.0159 (1.01 ms/thread mean, 1.01 ms / 1.02 ms)
-  Partition hamming error at step 6: 724
-  Mask: 00000000000000001010010100010000
-  Histogram of partitions used: [293, 731, 0, 0]
-Step 14: loss = 0.0142 (1.06 ms/thread mean, 1.06 ms / 1.07 ms)
-  Partition hamming error at step 7: 725
-  Mask: 00000000000000001010000100010000
-  Histogram of partitions used: [293, 731, 0, 0]
-Step 16: loss = 0.0133 (1.12 ms/thread mean, 1.11 ms / 1.12 ms)
-  Partition hamming error at step 8: 725
-  Mask: 00000000000000001010000100000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 18: loss = 0.0129 (1.17 ms/thread mean, 1.16 ms / 1.18 ms)
-  Partition hamming error at step 9: 725
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 20: loss = 0.0129 (1.22 ms/thread mean, 1.21 ms / 1.23 ms)
-  Partition hamming error at step 10: 726
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [295, 729, 0, 0]
-Step 22: loss = 0.0128 (1.27 ms/thread mean, 1.26 ms / 1.28 ms)
-  Partition hamming error at step 11: 727
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [293, 731, 0, 0]
-Step 24: loss = 0.0127 (1.32 ms/thread mean, 1.31 ms / 1.33 ms)
-  Partition hamming error at step 12: 727
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 26: loss = 0.0127 (1.37 ms/thread mean, 1.36 ms / 1.38 ms)
-  Partition hamming error at step 13: 726
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 28: loss = 0.0127 (1.42 ms/thread mean, 1.41 ms / 1.44 ms)
-  Partition hamming error at step 14: 723
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 30: loss = 0.0127 (1.47 ms/thread mean, 1.46 ms / 1.49 ms)
-  Partition hamming error at step 15: 723
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 32: loss = 0.0127 (1.53 ms/thread mean, 1.52 ms / 1.55 ms)
-  Partition hamming error at step 16: 725
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 34: loss = 0.0127 (1.60 ms/thread mean, 1.58 ms / 1.62 ms)
-  Partition hamming error at step 17: 725
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 36: loss = 0.0127 (1.66 ms/thread mean, 1.65 ms / 1.68 ms)
-  Partition hamming error at step 18: 726
-  Mask: 00000000000000001010000000000000
-  Histogram of partitions used: [294, 730, 0, 0]
-Step 38: loss = 0.2047 (1.75 ms/thread mean, 1.74 ms / 1.78 ms)
+Optimization finished in 4.85 ms over 1024 threads
+  Wall clock: 0.22103142738342285
+Step 0: loss = 1.1989 (0.22 ms/thread mean, 0.22 ms / 0.22 ms)
+  Partition hamming error at step 0: 860
+  Mask: 01000000010100000101000001010000
+  Histogram of partitions used: [180, 844, 0, 0]
+Step 2: loss = 0.1513 (0.77 ms/thread mean, 0.77 ms / 0.77 ms)
+  Partition hamming error at step 1: 876
+  Mask: 01000000000000000101000001000000
+  Histogram of partitions used: [165, 859, 0, 0]
+Step 4: loss = 0.0719 (0.93 ms/thread mean, 0.93 ms / 0.94 ms)
+  Partition hamming error at step 2: 871
+  Mask: 01000000000000000100000001000000
+  Histogram of partitions used: [166, 858, 0, 0]
+Step 6: loss = 0.0382 (1.10 ms/thread mean, 1.09 ms / 1.10 ms)
+  Partition hamming error at step 3: 877
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [167, 857, 0, 0]
+Step 8: loss = 0.0239 (1.26 ms/thread mean, 1.26 ms / 1.26 ms)
+  Partition hamming error at step 4: 881
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [168, 856, 0, 0]
+Step 10: loss = 0.0151 (1.42 ms/thread mean, 1.42 ms / 1.42 ms)
+  Partition hamming error at step 5: 884
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [165, 859, 0, 0]
+Step 12: loss = 0.0115 (1.58 ms/thread mean, 1.58 ms / 1.58 ms)
+  Partition hamming error at step 6: 881
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [165, 859, 0, 0]
+Step 14: loss = 0.0098 (1.74 ms/thread mean, 1.74 ms / 1.75 ms)
+  Partition hamming error at step 7: 875
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 16: loss = 0.0091 (1.91 ms/thread mean, 1.90 ms / 1.91 ms)
+  Partition hamming error at step 8: 875
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 18: loss = 0.0089 (2.07 ms/thread mean, 2.06 ms / 2.07 ms)
+  Partition hamming error at step 9: 873
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 20: loss = 0.0085 (2.23 ms/thread mean, 2.23 ms / 2.23 ms)
+  Partition hamming error at step 10: 876
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 22: loss = 0.0086 (2.39 ms/thread mean, 2.39 ms / 2.39 ms)
+  Partition hamming error at step 11: 876
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 24: loss = 0.0082 (2.55 ms/thread mean, 2.55 ms / 2.56 ms)
+  Partition hamming error at step 12: 872
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 26: loss = 0.0082 (2.72 ms/thread mean, 2.71 ms / 2.72 ms)
+  Partition hamming error at step 13: 876
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 28: loss = 0.0082 (2.88 ms/thread mean, 2.87 ms / 2.88 ms)
+  Partition hamming error at step 14: 876
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [164, 860, 0, 0]
+Step 30: loss = 0.0090 (3.04 ms/thread mean, 3.04 ms / 3.04 ms)
+  Partition hamming error at step 15: 876
+  Mask: 01000000000000000000000001000000
+  Histogram of partitions used: [163, 861, 0, 0]
+Step 32: loss = 0.2414 (3.33 ms/thread mean, 3.32 ms / 3.33 ms)
+  Partition hamming error at step 16: 0
+  Mask: 00010101010101010101010100010101
+  Histogram of partitions used: [0, 1024, 0, 0]
+Step 34: loss = 0.1312 (3.74 ms/thread mean, 3.74 ms / 3.75 ms)
+  Partition hamming error at step 17: 0
+  Mask: 00010101010101010101010100010101
+  Histogram of partitions used: [0, 1024, 0, 0]
+Step 36: loss = 0.0814 (4.15 ms/thread mean, 4.15 ms / 4.16 ms)
+  Partition hamming error at step 18: 0
+  Mask: 00010101010101010101010100010101
+  Histogram of partitions used: [0, 1024, 0, 0]
+Step 38: loss = 0.0561 (4.57 ms/thread mean, 4.56 ms / 4.57 ms)
   Partition hamming error at step 19: 0
-  Mask: 00000000000000001110000000000000
-  Histogram of partitions used: [393, 631, 0, 0]
- + diagnostics overhead per thread: 0.00505 ms / 0.00444 ms / 0.00752 ms
-Partition hamming error: 0.03125
-Final Mean L^2 Loss per block: 0.1908
+  Mask: 00010101010101010101010100010101
+  Histogram of partitions used: [0, 1024, 0, 0]
+ + diagnostics overhead per thread: 0.01393 ms / 0.00996 ms / 0.01760 ms
+Partition hamming error: 0.7548828125
+Final Mean L^2 Loss per block: 0.0473
 ```
 
 **3 Partitions, no-snapping, just partition pattern**:
@@ -499,5 +501,7 @@ Final Mean L^2 Loss per block: 0.0533
 7. Use PCA to replace the soft differentiable part
 8. Do an ensemble of 1P, 2P, and 3P
 9. Apply quantization
-10. [Done] Apply permutations to available astc patterns to expand the search space
+10. [Done] Apply permutations to available astc patterns to expand the search space (for 3P and 2P)
 11. [Done] Use a LUT for 3P as well (~80MB~ 12.2MB using permutation symmetry, plus we have the nice property that $T[\sigma(x)] = \argmin_{s}(\min(dist(\sigma_i(x), p_s))$ is also permutationally invariant, meaning we can quickly explore the full symmetry space during snapping)
+12. [Done] Apply the no-1P regularizer to 2P and 3P
+13. Create the symmetric LUT for 2P as well
