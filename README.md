@@ -256,11 +256,11 @@ Saved reconstructed image to 'reconstructed_3p.png'
 
 **Original**:
 
-![test_rgb_hard_1.png](test_rgb_hard_1.png)
+![test_rgb_hard_1_6x.png](test_rgb_hard_1_6x.png)
 
 **Single Partition**:
 
-![reconstructed_test_1p.png](reconstructed_test_1p.png)
+![reconstructed_test_1p_6x.png](reconstructed_test_1p_6x.png)
 
 ```
 --- Starting 1-Partition Compression ---
@@ -294,7 +294,7 @@ Final Mean L^2 Loss per block: 0.4216
 
 **Dual Partition**:
 
-![reconstructed_test_2p.png](reconstructed_test_2p.png)
+![reconstructed_test_2p_6x.png](reconstructed_test_2p_6x.png)
 
 ~2x time, 2x better quality
 
@@ -391,7 +391,7 @@ Final Mean L^2 Loss per block: 0.1908
 
 **3 Partitions, no-snapping, just partition pattern**:
 
-![reconstructed_test_3p.png](reconstructed_test_3p.png)
+![reconstructed_test_3p_6x.png](reconstructed_test_3p_6x.png)
 
 ~ similar time, 4x better quality
 
