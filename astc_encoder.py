@@ -172,17 +172,17 @@ def main(args):
         usage=spy.BufferUsage.unordered_access, data=initial_params_1p
     )
     
-    initial_params_2p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_2P)
-    initial_params_2p_struct['ep0'] = np.random.rand(num_blocks, 3)
-    initial_params_2p_struct['ep1'] = np.random.rand(num_blocks, 3)
-    initial_params_2p_struct['ep2'] = np.random.rand(num_blocks, 3)
-    initial_params_2p_struct['ep3'] = np.random.rand(num_blocks, 3)
-    initial_params_2p_struct['weights'] = np.random.rand(num_blocks, 16)
-    initial_params_2p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) - 0.5) # Center around 0
-    compressed_2P_buffer = device.create_buffer(
-        element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock2P,
-        usage=spy.BufferUsage.unordered_access, data=initial_params_2p_struct.view(np.float32)
-    )
+    # initial_params_2p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_2P)
+    # initial_params_2p_struct['ep0'] = np.random.rand(num_blocks, 3)
+    # initial_params_2p_struct['ep1'] = np.random.rand(num_blocks, 3)
+    # initial_params_2p_struct['ep2'] = np.random.rand(num_blocks, 3)
+    # initial_params_2p_struct['ep3'] = np.random.rand(num_blocks, 3)
+    # initial_params_2p_struct['weights'] = np.random.rand(num_blocks, 16)
+    # initial_params_2p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) - 0.5) # Center around 0
+    # compressed_2P_buffer = device.create_buffer(
+    #     element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock2P,
+    #     usage=spy.BufferUsage.unordered_access, data=initial_params_2p_struct.view(np.float32)
+    # )
 
     initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
     initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
@@ -198,21 +198,21 @@ def main(args):
         usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.float32)
     )
 
-    compress_params_data = np.array(
-        [(
-            args.lr,
-            args.m,
-            args.m / 10 if args.snap_steps == 0 else args.snap_steps,
-            num_blocks,
-            0 if args.no_snap else 1,
-            3 if args.use_3p else (2 if args.use_2p else 1)
-        )],
-        dtype=params_dtype
-    )
-    compress_params_buffer = device.create_buffer(
-        element_count=1, resource_type_layout=reflection.g_compress_step_params,
-        usage=spy.BufferUsage.unordered_access, data=compress_params_data.view(np.float32)
-    )
+    # compress_params_data = np.array(
+    #     [(
+    #         args.lr,
+    #         args.m,
+    #         args.m / 10 if args.snap_steps == 0 else args.snap_steps,
+    #         num_blocks,
+    #         0 if args.no_snap else 1,
+    #         3 if args.use_3p else (2 if args.use_2p else 1)
+    #     )],
+    #     dtype=params_dtype
+    # )
+    # compress_params_buffer = device.create_buffer(
+    #     element_count=1, resource_type_layout=reflection.g_params,
+    #     usage=spy.BufferUsage.unordered_access, data=compress_params_data.view(np.float32)
+    # )
 
     final_loss_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_final_loss,
@@ -250,9 +250,9 @@ def main(args):
     dispatch_vars = {
         "g_groundtruth": groundtruth_buffer,
         "g_compressedBlock": compressed_buffer,
-        "g_compressedBlock2P": compressed_2P_buffer,
+        # "g_compressedBlock2P": compressed_2P_buffer,
         "g_compressedBlock3P": compressed_3P_buffer,
-        "g_compress_step_params": compress_params_buffer,
+        # "g_compress_step_params": compress_params_buffer,
         "g_final_loss": final_loss_buffer,
         "g_reconstructed": final_reconstructed_buffer,
         'g_diagnostics': final_diagnostics_buffer,
@@ -261,6 +261,15 @@ def main(args):
         "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
         "g_astc_2p_4x4_lut_s2": astc_2p_4x4_lut_s2_buffer,
         "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np, "lut3": astc_lut.lut3},
+        "g_params": {
+            "learning_rate": args.lr,
+            "steps": args.m,
+            "snap_steps": args.snap_steps,
+            "num_blocks": num_blocks,
+            "snap": 0 if args.no_snap else 1,
+            "max_partitions": 3 if args.use_3p else (2 if args.use_2p else 1),
+            "debug_reconstruction": args.debug_reconstruction,
+        }
     }
 
     grid = (num_blocks, 1, 1)
@@ -319,6 +328,7 @@ if __name__ == "__main__":
     parser.add_argument("--m", type=int, default=100, help="Number of gradient descent steps per dispatch.")
     parser.add_argument("--snap_steps", type=int, default=0, help="Frequency of snapping partitions to valid ASTC maps (for 2P mode).")
     parser.add_argument("--no_snap", action="store_true", help="Don't snap to astc valid patterns")
+    parser.add_argument("--debug_reconstruction", action="store_true", help="Use debug output for reconstruction")
 
 
     args = parser.parse_args()

@@ -58,7 +58,7 @@ struct CompressedTextureBlock2P : IDifferentiable
     no_diff uint astc_seed;
 };
 
-struct CompressStepParams
+struct Params
 {
     float learning_rate;
     uint steps;
@@ -66,7 +66,9 @@ struct CompressStepParams
     uint num_blocks;
     uint snap;
     uint max_partitions;
+    bool debug_reconstruction;
 };
+ConstantBuffer<Params> g_params;
 
 // The image to encode (or to compute the loss of)
 StructuredBuffer<TextureBlock> g_groundtruth;
@@ -85,9 +87,6 @@ RWStructuredBuffer<CompressedTextureBlock2P> g_compressedBlock2P;
 
 // The loss of the encoded block
 RWStructuredBuffer<float> g_final_loss;
-
-// The learning rate and # of steps to take
-RWStructuredBuffer<CompressStepParams> g_compress_step_params;
 
 // ASTC 2-partition LUT to snap a partition map to a valid astc partition seed
 StructuredBuffer<uint> g_lut_ideal_to_seed;  // 65536-entry (256KB)
@@ -428,13 +427,13 @@ float loss_2P(
 void compress_step(uint3 dispatchThreadID : SV_DispatchThreadID)
 {
     uint blockIdx = dispatchThreadID.x;
-    if (blockIdx >= g_compress_step_params[0].num_blocks) return;
+    if (blockIdx >= g_params.num_blocks) return;
     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
     CompressedTextureBlock value = g_compressedBlock[blockIdx];
     TextureBlock groundtruth = g_groundtruth[blockIdx];
-    float lr = g_compress_step_params[0].learning_rate;
-    uint steps = g_compress_step_params[0].steps;
+    float lr = g_params.learning_rate;
+    uint steps = g_params.steps;
     uint checkpoint = steps / 20;
 
     for (int step = 0; step < int(steps); step++)
@@ -463,84 +462,84 @@ void compress_step(uint3 dispatchThreadID : SV_DispatchThreadID)
 }
 
 // [require(spvShaderClockKHR)]
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
-{
-    uint blockIdx = dispatchThreadID.x;
-    if (blockIdx >= g_compress_step_params[0].num_blocks) return;
-    g_diagnostics[blockIdx].start_clock = getRealtimeClock();
+// [shader("compute")]
+// [numthreads(64, 1, 1)]
+// void compress_2P_step(uint3 dispatchThreadID : SV_DispatchThreadID)
+// {
+//     uint blockIdx = dispatchThreadID.x;
+//     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
+//     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
-    CompressedTextureBlock2P value = g_compressedBlock2P[blockIdx];
-    TextureBlock groundtruth = g_groundtruth[blockIdx];
-    float lr = g_compress_step_params[0].learning_rate;
-    uint steps = g_compress_step_params[0].steps;
-    uint snap_steps = g_compress_step_params[0].snap_steps;
-    uint first_snap_step = uint(steps) / 2;
-    uint checkpoint = max(1, steps / 20);
-    int step;
+//     CompressedTextureBlock2P value = g_compressedBlock2P[blockIdx];
+//     TextureBlock groundtruth = g_groundtruth[blockIdx];
+//     float lr = g_compress_step_params[0].learning_rate;
+//     uint steps = g_compress_step_params[0].steps;
+//     uint snap_steps = g_compress_step_params[0].snap_steps;
+//     uint first_snap_step = uint(steps) / 2;
+//     uint checkpoint = max(1, steps / 20);
+//     int step;
 
-    for (step = 0; step < int(steps); step++)
-    {
-        DifferentialPair<CompressedTextureBlock2P> cb_pair = diffPair(value);
-        bwd_diff(loss_2P)(groundtruth, cb_pair, 1.0f);
-        CompressedTextureBlock2P.Differential gradient = cb_pair.d;
+//     for (step = 0; step < int(steps); step++)
+//     {
+//         DifferentialPair<CompressedTextureBlock2P> cb_pair = diffPair(value);
+//         bwd_diff(loss_2P)(groundtruth, cb_pair, 1.0f);
+//         CompressedTextureBlock2P.Differential gradient = cb_pair.d;
 
-        for (int i = 0; i < 16; i++)
-        {
-            value.partition_logits[i] = (value.partition_logits[i] - gradient.partition_logits[i] * lr);
-        }
+//         for (int i = 0; i < 16; i++)
+//         {
+//             value.partition_logits[i] = (value.partition_logits[i] - gradient.partition_logits[i] * lr);
+//         }
 
-        if (step > first_snap_step && step % snap_steps == 0) {
-            // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
-        }
+//         if (step > first_snap_step && step % snap_steps == 0) {
+//             // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
+//         }
         
-        // snap(value, 1);
-        optim_weights_2P(value, groundtruth);
+//         // snap(value, 1);
+//         optim_weights_2P(value, groundtruth);
 
-        if (step % checkpoint == 0) {
-            uint iter = step / checkpoint;
-            g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
-            g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
+//         if (step % checkpoint == 0) {
+//             uint iter = step / checkpoint;
+//             g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
+//             g_diagnostics[blockIdx].loss_log[iter] = loss_2P(groundtruth, value);
 
-            uint raw_map = pack_logits_to_mask(value.partition_logits);
-            uint closest_seed = g_lut_ideal_to_seed[raw_map];
-            uint final_mask = g_lut_seed_to_mask[closest_seed];
+//             uint raw_map = pack_logits_to_mask(value.partition_logits);
+//             uint closest_seed = g_lut_ideal_to_seed[raw_map];
+//             uint final_mask = g_lut_seed_to_mask[closest_seed];
 
-            // block.astc_seed = closest_seed;
-            // block.astc_partition_map = final_mask;
-            // block.ideal_partition_map = raw_map;
-            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance(raw_map, final_mask);
-            g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
-        }
-    }
+//             // block.astc_seed = closest_seed;
+//             // block.astc_partition_map = final_mask;
+//             // block.ideal_partition_map = raw_map;
+//             g_diagnostics[blockIdx].partition_hamming_error_log[iter] = hamming_distance(raw_map, final_mask);
+//             g_diagnostics[blockIdx].ideal_partition_log[iter] = raw_map;
+//         }
+//     }
 
-    // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
-    snap(value, 1);
-    optim_weights_2P(value, groundtruth);
+//     // snap(value, 1 + float(step - first_snap_step) / (snap_steps * 2));
+//     snap(value, 1);
+//     optim_weights_2P(value, groundtruth);
 
-    g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
-    g_compressedBlock2P[blockIdx] = value;
-    g_reconstructed[blockIdx] = decompress2P(value);
-    g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
-    g_final_loss[blockIdx] = loss_2P(groundtruth, value);
-    g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
-}
+//     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
+//     g_compressedBlock2P[blockIdx] = value;
+//     g_reconstructed[blockIdx] = decompress2P(value);
+//     g_diagnostics[blockIdx].partition_hamming_error = hamming_distance(value.ideal_partition_map, value.astc_partition_map);
+//     g_final_loss[blockIdx] = loss_2P(groundtruth, value);
+//     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
+// }
 
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void get_loss(uint3 dispatchThreadID : SV_DispatchThreadID)
-{
-    uint blockIdx = dispatchThreadID.x;
-    if (blockIdx >= g_compress_step_params[0].num_blocks) return;
-    g_final_loss[blockIdx] = loss(g_groundtruth[blockIdx], g_compressedBlock[blockIdx]);
-}
+// [shader("compute")]
+// [numthreads(64, 1, 1)]
+// void get_loss(uint3 dispatchThreadID : SV_DispatchThreadID)
+// {
+//     uint blockIdx = dispatchThreadID.x;
+//     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
+//     g_final_loss[blockIdx] = loss(g_groundtruth[blockIdx], g_compressedBlock[blockIdx]);
+// }
 
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void get_loss_2P(uint3 dispatchThreadID : SV_DispatchThreadID)
-{
-    uint blockIdx = dispatchThreadID.x;
-    if (blockIdx >= g_compress_step_params[0].num_blocks) return;
-    g_final_loss[blockIdx] = loss_2P(g_groundtruth[blockIdx], g_compressedBlock2P[blockIdx]);
-}
+// [shader("compute")]
+// [numthreads(64, 1, 1)]
+// void get_loss_2P(uint3 dispatchThreadID : SV_DispatchThreadID)
+// {
+//     uint blockIdx = dispatchThreadID.x;
+//     if (blockIdx >= g_compress_step_params[0].num_blocks) return;
+//     g_final_loss[blockIdx] = loss_2P(g_groundtruth[blockIdx], g_compressedBlock2P[blockIdx]);
+// }
