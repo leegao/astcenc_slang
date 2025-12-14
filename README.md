@@ -30,31 +30,30 @@ For 2-partition, this final step works great because your hamming error rate for
 --- Starting 1-Partition Compression ---
 Running gradient descent for 40 steps
 
-Optimization finished in 48.46 ms over 129600 threads
-  Wall clock: 0.6455645561218262
-Step 0: loss = 0.7794 (0.03 ms/thread mean, 0.02 ms / 0.12 ms)
-Step 2: loss = 0.1151 (0.06 ms/thread mean, 0.05 ms / 0.26 ms)
-Step 4: loss = 0.0373 (0.10 ms/thread mean, 0.08 ms / 0.40 ms)
-Step 6: loss = 0.0201 (0.13 ms/thread mean, 0.11 ms / 0.54 ms)
-Step 8: loss = 0.0152 (0.16 ms/thread mean, 0.14 ms / 0.68 ms)
-Step 10: loss = 0.0133 (0.20 ms/thread mean, 0.17 ms / 0.82 ms)
-Step 12: loss = 0.0123 (0.23 ms/thread mean, 0.20 ms / 0.88 ms)
-Step 14: loss = 0.0117 (0.26 ms/thread mean, 0.23 ms / 0.91 ms)
-Step 16: loss = 0.0112 (0.29 ms/thread mean, 0.26 ms / 0.94 ms)
-Step 18: loss = 0.0109 (0.33 ms/thread mean, 0.29 ms / 0.97 ms)
-Step 20: loss = 0.0106 (0.36 ms/thread mean, 0.32 ms / 1.00 ms)
-Step 22: loss = 0.0104 (0.39 ms/thread mean, 0.35 ms / 1.03 ms)
-Step 24: loss = 0.0102 (0.42 ms/thread mean, 0.38 ms / 1.07 ms)
-Step 26: loss = 0.0100 (0.45 ms/thread mean, 0.41 ms / 1.13 ms)
-Step 28: loss = 0.0098 (0.48 ms/thread mean, 0.44 ms / 1.17 ms)
-Step 30: loss = 0.0097 (0.52 ms/thread mean, 0.47 ms / 1.20 ms)
-Step 32: loss = 0.0096 (0.55 ms/thread mean, 0.50 ms / 1.23 ms)
-Step 34: loss = 0.0095 (0.58 ms/thread mean, 0.53 ms / 1.26 ms)
-Step 36: loss = 0.0093 (0.61 ms/thread mean, 0.56 ms / 1.29 ms)
-Step 38: loss = 0.0092 (0.64 ms/thread mean, 0.59 ms / 1.32 ms)
- + diagnostics overhead per thread: 0.00735 ms / 0.00236 ms / 0.02276 ms
-Final Mean L^2 Loss per block: 0.0092
-Saved reconstructed image to 'reconstructed_1p.png'
+Optimization finished in 74.56 ms over 129600 threads
+  Wall clock: 0.9305100440979004
+Step 0: loss = 0.0814 (0.06 ms/thread mean, 0.04 ms / 0.21 ms)
+Step 2: loss = 0.0093 (0.11 ms/thread mean, 0.08 ms / 0.43 ms)
+Step 4: loss = 0.0073 (0.16 ms/thread mean, 0.12 ms / 0.55 ms)
+Step 6: loss = 0.0067 (0.20 ms/thread mean, 0.16 ms / 0.61 ms)
+Step 8: loss = 0.0066 (0.25 ms/thread mean, 0.20 ms / 0.66 ms)
+Step 10: loss = 0.0066 (0.30 ms/thread mean, 0.25 ms / 0.72 ms)
+Step 12: loss = 0.0067 (0.34 ms/thread mean, 0.29 ms / 0.77 ms)
+Step 14: loss = 0.0068 (0.39 ms/thread mean, 0.33 ms / 0.82 ms)
+Step 16: loss = 0.0069 (0.44 ms/thread mean, 0.37 ms / 1.17 ms)
+Step 18: loss = 0.0069 (0.49 ms/thread mean, 0.42 ms / 1.41 ms)
+Step 20: loss = 0.0070 (0.54 ms/thread mean, 0.46 ms / 1.60 ms)
+Step 22: loss = 0.0070 (0.59 ms/thread mean, 0.50 ms / 1.80 ms)
+Step 24: loss = 0.0070 (0.64 ms/thread mean, 0.55 ms / 1.99 ms)
+Step 26: loss = 0.0071 (0.69 ms/thread mean, 0.59 ms / 2.19 ms)
+Step 28: loss = 0.0071 (0.74 ms/thread mean, 0.63 ms / 2.29 ms)
+Step 30: loss = 0.0071 (0.78 ms/thread mean, 0.67 ms / 2.34 ms)
+Step 32: loss = 0.0071 (0.83 ms/thread mean, 0.71 ms / 2.39 ms)
+Step 34: loss = 0.0071 (0.88 ms/thread mean, 0.75 ms / 2.44 ms)
+Step 36: loss = 0.0071 (0.93 ms/thread mean, 0.79 ms / 2.49 ms)
+Step 38: loss = 0.0071 (0.98 ms/thread mean, 0.83 ms / 2.54 ms)
+ + diagnostics overhead per thread: 0.01154 ms / 0.00500 ms / 0.08268 ms
+Final Mean L^2 Loss per block: 0.0071
 ```
 
 **Dual Partition**:
@@ -265,30 +264,30 @@ Final Mean L^2 Loss per block: 0.0018
 --- Starting 1-Partition Compression ---
 Running gradient descent for 40 steps
 
-Optimization finished in 0.83 ms over 1024 threads
-  Wall clock: 0.13380885124206543
-Step 0: loss = 4.0983 (0.11 ms/thread mean, 0.11 ms / 0.11 ms)
-Step 2: loss = 0.5616 (0.25 ms/thread mean, 0.25 ms / 0.25 ms)
-Step 4: loss = 0.4537 (0.29 ms/thread mean, 0.29 ms / 0.29 ms)
-Step 6: loss = 0.4304 (0.32 ms/thread mean, 0.32 ms / 0.32 ms)
-Step 8: loss = 0.4225 (0.35 ms/thread mean, 0.35 ms / 0.35 ms)
-Step 10: loss = 0.4205 (0.38 ms/thread mean, 0.38 ms / 0.38 ms)
-Step 12: loss = 0.4198 (0.41 ms/thread mean, 0.41 ms / 0.41 ms)
-Step 14: loss = 0.4198 (0.44 ms/thread mean, 0.44 ms / 0.44 ms)
-Step 16: loss = 0.4199 (0.47 ms/thread mean, 0.47 ms / 0.47 ms)
-Step 18: loss = 0.4199 (0.50 ms/thread mean, 0.50 ms / 0.50 ms)
-Step 20: loss = 0.4202 (0.53 ms/thread mean, 0.53 ms / 0.53 ms)
-Step 22: loss = 0.4206 (0.56 ms/thread mean, 0.56 ms / 0.56 ms)
-Step 24: loss = 0.4209 (0.59 ms/thread mean, 0.59 ms / 0.59 ms)
-Step 26: loss = 0.4211 (0.62 ms/thread mean, 0.62 ms / 0.62 ms)
-Step 28: loss = 0.4213 (0.65 ms/thread mean, 0.65 ms / 0.65 ms)
-Step 30: loss = 0.4215 (0.68 ms/thread mean, 0.68 ms / 0.69 ms)
-Step 32: loss = 0.4217 (0.71 ms/thread mean, 0.71 ms / 0.72 ms)
-Step 34: loss = 0.4218 (0.74 ms/thread mean, 0.74 ms / 0.75 ms)
-Step 36: loss = 0.4219 (0.77 ms/thread mean, 0.77 ms / 0.78 ms)
-Step 38: loss = 0.4219 (0.80 ms/thread mean, 0.80 ms / 0.81 ms)
- + diagnostics overhead per thread: 0.00678 ms / 0.00444 ms / 0.00796 ms
-Final Mean L^2 Loss per block: 0.4216
+Optimization finished in 1.43 ms over 1024 threads
+  Wall clock: 0.2961082458496094
+Step 0: loss = 2.5188 (0.20 ms/thread mean, 0.20 ms / 0.20 ms)
+Step 2: loss = 0.4694 (0.39 ms/thread mean, 0.39 ms / 0.40 ms)
+Step 4: loss = 0.4279 (0.58 ms/thread mean, 0.58 ms / 0.59 ms)
+Step 6: loss = 0.4181 (0.71 ms/thread mean, 0.71 ms / 0.71 ms)
+Step 8: loss = 0.4156 (0.75 ms/thread mean, 0.75 ms / 0.76 ms)
+Step 10: loss = 0.4159 (0.79 ms/thread mean, 0.79 ms / 0.80 ms)
+Step 12: loss = 0.4168 (0.84 ms/thread mean, 0.83 ms / 0.84 ms)
+Step 14: loss = 0.4176 (0.88 ms/thread mean, 0.87 ms / 0.89 ms)
+Step 16: loss = 0.4179 (0.92 ms/thread mean, 0.91 ms / 0.93 ms)
+Step 18: loss = 0.4180 (0.96 ms/thread mean, 0.96 ms / 0.97 ms)
+Step 20: loss = 0.4184 (1.00 ms/thread mean, 1.00 ms / 1.01 ms)
+Step 22: loss = 0.4188 (1.04 ms/thread mean, 1.04 ms / 1.05 ms)
+Step 24: loss = 0.4190 (1.09 ms/thread mean, 1.08 ms / 1.10 ms)
+Step 26: loss = 0.4192 (1.13 ms/thread mean, 1.12 ms / 1.14 ms)
+Step 28: loss = 0.4194 (1.17 ms/thread mean, 1.16 ms / 1.18 ms)
+Step 30: loss = 0.4196 (1.21 ms/thread mean, 1.20 ms / 1.22 ms)
+Step 32: loss = 0.4199 (1.25 ms/thread mean, 1.24 ms / 1.27 ms)
+Step 34: loss = 0.4201 (1.29 ms/thread mean, 1.28 ms / 1.31 ms)
+Step 36: loss = 0.4203 (1.33 ms/thread mean, 1.33 ms / 1.35 ms)
+Step 38: loss = 0.4204 (1.38 ms/thread mean, 1.37 ms / 1.39 ms)
+ + diagnostics overhead per thread: 0.01398 ms / 0.00544 ms / 0.01868 ms
+Final Mean L^2 Loss per block: 0.4208
 ```
 
 **Dual Partition**:
@@ -495,7 +494,7 @@ Final Mean L^2 Loss per block: 0.0149
     * Turns out partition selection isn't the problem, it's astc snapping, and jointly modeling the optimization with that in mind
       is very hard without resorting to combinatorial search
 6. Actually implement the bise encoding and the astc block format
-7. Use PCA to replace the soft differentiable part
+7. [Done] ~Use PCA to replace the soft differentiable part~ (trapped in local minimums, also due to coordinate descent, takes ~ same # of steps to converge as gradient descent...)
 8. Do an ensemble of 1P, 2P, and 3P
 9. Apply quantization
 10. [Done] Apply permutations to available astc patterns to expand the search space (for 3P and 2P)

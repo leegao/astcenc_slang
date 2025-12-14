@@ -4,21 +4,35 @@
 layout(row_major) uniform;
 layout(row_major) buffer;
 
-#line 51 0
-struct CompressStepParams_0
+#line 46 0
+struct Params_0
 {
     float learning_rate_0;
     uint steps_0;
     uint snap_steps_0;
     uint num_blocks_0;
-    uint snap_0;
+    bool snap_0;
+    uint max_partitions_0;
+    bool debug_reconstruction_0;
+    uint exact_steps_0;
+    bool use_pca_0;
 };
 
 
-#line 76
-layout(std430, binding = 5) buffer StructuredBuffer_CompressStepParams_t_0 {
-    CompressStepParams_0 _data[];
-} g_compress_step_params_0;
+#line 58
+layout(binding = 0)
+layout(std140) uniform block_Params_0
+{
+    float learning_rate_0;
+    uint steps_0;
+    uint snap_steps_0;
+    uint num_blocks_0;
+    bool snap_0;
+    uint max_partitions_0;
+    bool debug_reconstruction_0;
+    uint exact_steps_0;
+    bool use_pca_0;
+}g_params_0;
 
 #line 14
 struct Diagnostics_0
@@ -31,15 +45,16 @@ struct Diagnostics_0
     uvec2  timestamps_0[20];
     uint  partition_hamming_error_log_0[20];
     uint  ideal_partition_log_0[20];
+    uint  partition_count_0[20];
 };
 
 
 #line 67
-layout(std430, binding = 2) buffer StructuredBuffer_Diagnostics_t_0 {
+layout(std430, binding = 3) buffer StructuredBuffer_Diagnostics_t_0 {
     Diagnostics_0 _data[];
 } g_diagnostics_0;
 
-#line 27
+#line 28
 struct NonDifferentiableWeights_0
 {
     float  data_0[16];
@@ -47,6 +62,13 @@ struct NonDifferentiableWeights_0
 
 
 #line 37
+struct NonDifferentiableIntWeights_0
+{
+    int  data_1[16];
+};
+
+
+#line 303
 struct CompressedTextureBlock3P_0
 {
     vec3 ep0_0;
@@ -56,16 +78,18 @@ struct CompressedTextureBlock3P_0
     vec3 ep4_0;
     vec3 ep5_0;
     NonDifferentiableWeights_0 weights_0;
-    NonDifferentiableWeights_0 partition_logits_0;
+    NonDifferentiableIntWeights_0 partition_index_0;
     uint astc_partition_map_0;
     uint ideal_partition_map_0;
     uint astc_seed_0;
     uint perm_0;
+    uint partition_count_1;
+    uint max_partitions_1;
 };
 
 
 #line 70
-layout(std430, binding = 3) buffer StructuredBuffer_CompressedTextureBlock3P_t_0 {
+layout(std430, binding = 4) buffer StructuredBuffer_CompressedTextureBlock3P_t_0 {
     CompressedTextureBlock3P_0 _data[];
 } g_compressedBlock3P_0;
 
@@ -77,11 +101,16 @@ struct TextureBlock_0
 
 
 #line 61
-layout(std430, binding = 0) readonly buffer StructuredBuffer_TextureBlock_t_0 {
+layout(std430, binding = 1) readonly buffer StructuredBuffer_TextureBlock_t_0 {
     TextureBlock_0 _data[];
 } g_groundtruth_0;
 
-#line 82
+#line 77
+layout(std430, binding = 7) readonly buffer StructuredBuffer_uint_t_0 {
+    uint _data[];
+} g_astc_3p_4x4_lut_s3_0;
+
+#line 79
 struct LUT_0
 {
     uint  lut2_0[1024];
@@ -89,48 +118,53 @@ struct LUT_0
 };
 
 
-#line 87
-layout(binding = 7)
+#line 84
+layout(binding = 8)
 layout(std140) uniform block_LUT_0
 {
     uint  lut2_0[1024];
     uint  lut3_0[1024];
 }g_lut_0;
 
+#line 76
+layout(std430, binding = 6) readonly buffer StructuredBuffer_uint_t_1 {
+    uint _data[];
+} g_astc_2p_4x4_lut_s2_0;
+
 #line 64
-layout(std430, binding = 1) buffer StructuredBuffer_TextureBlock_t_1 {
+layout(std430, binding = 2) buffer StructuredBuffer_TextureBlock_t_1 {
     TextureBlock_0 _data[];
 } g_reconstructed_0;
 
 #line 73
-layout(std430, binding = 4) buffer StructuredBuffer_float_t_0 {
+layout(std430, binding = 5) buffer StructuredBuffer_float_t_0 {
     float _data[];
 } g_final_loss_0;
 
-#line 91
+#line 89
 struct PCG32_0
 {
     uint state_0;
 };
 
 
-#line 95
+#line 93
 PCG32_0 PCG32_x24init_0(uint seed_0)
 {
 
-#line 95
+#line 93
     PCG32_0 _S1;
 
     uint _S2 = seed_0 * 747796405U + 2891336453U;
     uint _S3 = ((_S2 >> ((_S2 >> 28U) + 4U)) ^ _S2) * 277803737U;
     _S1.state_0 = (_S3 >> 22U) ^ _S3;
 
-#line 95
+#line 93
     return _S1;
 }
 
 
-#line 110
+#line 108
 uint PCG32_nextUint_0(inout PCG32_0 this_0)
 {
     uint oldState_0 = this_0.state_0;
@@ -140,7 +174,7 @@ uint PCG32_nextUint_0(inout PCG32_0 this_0)
 }
 
 
-#line 115
+#line 113
 struct DiffPair_vectorx3Cfloatx2C3x3E_0
 {
     vec3 primal_0;
@@ -189,7 +223,7 @@ void _d_dot_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 dpx_0, inout DiffPair_vecto
 }
 
 
-#line 504 0
+#line 674 0
 float dist_0(vec3 x_0, vec3 ep0_1, vec3 ep1_1)
 {
     vec3 lineDir_0 = ep1_1 - ep0_1;
@@ -198,7 +232,25 @@ float dist_0(vec3 x_0, vec3 ep0_1, vec3 ep1_1)
 }
 
 
-#line 37
+#line 41
+int NonDifferentiableIntWeights_operatorx5Bx5D_get_0(NonDifferentiableIntWeights_0 this_1, int n_0)
+{
+
+#line 41
+    return this_1.data_1[n_0];
+}
+
+
+#line 13408 2
+vec3 saturate_0(vec3 x_1)
+{
+
+#line 13416
+    return clamp(x_1, vec3(0.0), vec3(1.0));
+}
+
+
+#line 303 0
 struct CompressedTextureBlock3P_Differential_0
 {
     vec3 ep0_2;
@@ -210,14 +262,14 @@ struct CompressedTextureBlock3P_Differential_0
 };
 
 
-#line 37
+#line 303
 CompressedTextureBlock3P_Differential_0 CompressedTextureBlock3P_x24_syn_dzero_0()
 {
 
-#line 37
+#line 303
     CompressedTextureBlock3P_Differential_0 result_0;
 
-#line 2239 2
+#line 2239 3
     vec3 _S4 = vec3(0.0);
 
 #line 2239
@@ -243,16 +295,16 @@ CompressedTextureBlock3P_Differential_0 CompressedTextureBlock3P_x24_syn_dzero_0
 }
 
 
-#line 31 0
-float NonDifferentiableWeights_operatorx5Bx5D_get_0(NonDifferentiableWeights_0 this_1, int n_0)
+#line 32 0
+float NonDifferentiableWeights_operatorx5Bx5D_get_0(NonDifferentiableWeights_0 this_2, int n_1)
 {
 
-#line 31
-    return this_1.data_0[n_0];
+#line 32
+    return this_2.data_0[n_1];
 }
 
 
-#line 31
+#line 8119 2
 struct DiffPair_float_0
 {
     float primal_0;
@@ -298,7 +350,7 @@ void _d_lerp_0(inout DiffPair_float_0 dpx_1, inout DiffPair_float_0 dpy_1, inout
 }
 
 
-#line 1 3
+#line 1 4
 void _d_lerp_vector_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 dpx_2, inout DiffPair_vectorx3Cfloatx2C3x3E_0 dpy_2, inout DiffPair_vectorx3Cfloatx2C3x3E_0 dpz_0, vec3 dOut_2)
 {
 
@@ -423,570 +475,1546 @@ void _d_lerp_vector_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 dpx_2, inout DiffPa
 }
 
 
-#line 442 0
-TextureBlock_0 decompress3P_0(CompressedTextureBlock3P_0 blockCoefficients_0)
+#line 483 0
+TextureBlock_0 CompressedTextureBlock3P_decompress3P_0(CompressedTextureBlock3P_0 this_3)
 {
-
-#line 451
     TextureBlock_0 outputBlock_0;
 
-#line 451
+#line 485
     uint i_0 = 0U;
     for(;;)
     {
 
-#line 452
+#line 486
         if(i_0 < 16U)
         {
         }
         else
         {
 
-#line 452
+#line 486
             break;
         }
         int _S9 = int(i_0);
 
-#line 454
-        float _S10 = NonDifferentiableWeights_operatorx5Bx5D_get_0(blockCoefficients_0.weights_0, _S9);
-        int partition_0 = int(NonDifferentiableWeights_operatorx5Bx5D_get_0(blockCoefficients_0.partition_logits_0, _S9));
-        bool _S11 = partition_0 == 0;
+#line 488
+        float _S10 = NonDifferentiableWeights_operatorx5Bx5D_get_0(this_3.weights_0, _S9);
+        uint partition_0 = clamp(uint(int(float(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(this_3.partition_index_0, _S9)))), 0U, this_3.max_partitions_1 - 1U);
+        bool _S11 = partition_0 == 0U;
 
-#line 456
+#line 490
         vec3 e0_0;
 
-#line 456
+#line 490
         if(_S11)
         {
 
-#line 456
-            e0_0 = blockCoefficients_0.ep0_0;
+#line 490
+            e0_0 = this_3.ep0_0;
 
-#line 456
+#line 490
         }
         else
         {
 
-#line 456
-            if(partition_0 == 1)
+#line 490
+            if(partition_0 == 1U)
             {
 
-#line 456
-                e0_0 = blockCoefficients_0.ep2_0;
+#line 490
+                e0_0 = this_3.ep2_0;
 
-#line 456
+#line 490
             }
             else
             {
 
-#line 456
-                e0_0 = blockCoefficients_0.ep4_0;
+#line 490
+                e0_0 = this_3.ep4_0;
 
-#line 456
+#line 490
             }
 
-#line 456
+#line 490
         }
 
-#line 456
+#line 490
         vec3 e1_0;
         if(_S11)
         {
 
-#line 457
-            e1_0 = blockCoefficients_0.ep1_0;
+#line 491
+            e1_0 = this_3.ep1_0;
 
-#line 457
+#line 491
         }
         else
         {
 
-#line 457
-            if(partition_0 == 1)
+#line 491
+            if(partition_0 == 1U)
             {
 
-#line 457
-                e1_0 = blockCoefficients_0.ep3_0;
+#line 491
+                e1_0 = this_3.ep3_0;
 
-#line 457
+#line 491
             }
             else
             {
 
-#line 457
-                e1_0 = blockCoefficients_0.ep5_0;
+#line 491
+                e1_0 = this_3.ep5_0;
 
-#line 457
+#line 491
             }
 
-#line 457
+#line 491
         }
         outputBlock_0.pixels_0[i_0] = mix(e0_0, e1_0, vec3(_S10));
 
-#line 452
+#line 486
         i_0 = i_0 + 1U;
 
-#line 452
+#line 486
     }
 
-#line 460
+#line 494
     return outputBlock_0;
 }
 
 
-#line 13408 4
-vec3 saturate_0(vec3 x_1)
+#line 13393 2
+float saturate_1(float x_2)
 {
 
-#line 13416
-    return clamp(x_1, vec3(0.0), vec3(1.0));
+#line 13401
+    return clamp(x_2, 0.0, 1.0);
 }
 
 
-#line 362 0
-float distSq_0(vec3 P_0, vec3 L_0, float pDotL_0, float invLenSq_0)
+#line 395 0
+float CompressedTextureBlock3P_distSq_0(vec3 P_0, vec3 L_0, float pDotL_0, float invLenSq_0)
 {
 
     return dot(P_0, P_0) - pDotL_0 * pDotL_0 * invLenSq_0;
 }
 
-
-uint get_partition_0(float d1_0, float d2_0, float d3_0)
+uint CompressedTextureBlock3P_argmin_0(float d1_0, float d2_0, float d3_0)
 {
 
-#line 369
+#line 401
     bool _S12;
 
     if(d1_0 < d2_0)
     {
 
-#line 371
+#line 403
         _S12 = d1_0 < d3_0;
 
-#line 371
+#line 403
     }
     else
     {
 
-#line 371
+#line 403
         _S12 = false;
 
-#line 371
+#line 403
     }
 
-#line 371
+#line 403
     if(_S12)
     {
 
-#line 371
+#line 403
         return 0U;
     }
 
-#line 372
+#line 404
     if(d2_0 < d3_0)
     {
 
-#line 372
+#line 404
         return 1U;
     }
 
-#line 373
+#line 405
     return 2U;
 }
 
 
-#line 430
-uint pack_partition_indices_to_mask_0(float  p_logits_0[16])
+#line 318
+uint CompressedTextureBlock3P_pack_partition_indices_0(CompressedTextureBlock3P_0 this_4)
 {
 
-#line 430
+#line 318
     int i_1 = 0;
 
-#line 430
+#line 318
     uint raw_map_0 = 0U;
 
 
     for(;;)
     {
 
-#line 433
+#line 321
         if(i_1 < 16)
         {
         }
         else
         {
 
-#line 433
+#line 321
             break;
         }
 
-        uint raw_map_1 = raw_map_0 | (uint(clamp(round(p_logits_0[i_1]), 0.0, 2.0)) << (i_1 * 2));
+        uint raw_map_1 = raw_map_0 | ((clamp(uint(round(float(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(this_4.partition_index_0, i_1)))), 0U, 2U)) << (i_1 * 2));
 
-#line 433
+#line 321
         i_1 = i_1 + 1;
 
-#line 433
+#line 321
         raw_map_0 = raw_map_1;
 
-#line 433
+#line 321
     }
 
-#line 438
+#line 326
     return raw_map_0;
 }
 
 
-#line 133
+#line 223
+uint lut3_key_0(uint x_3)
+{
+
+#line 223
+    uint result_1 = 0U;
+
+#line 223
+    int i_2 = 15;
+
+#line 228
+    [[unroll]]
+    for(;;)
+    {
+
+#line 228
+        if(i_2 >= 0)
+        {
+        }
+        else
+        {
+
+#line 228
+            break;
+        }
+        uint _S13 = result_1 * 3U + ((x_3 >> (i_2 * 2)) & 3U);
+
+#line 228
+        int _S14 = i_2 - 1;
+
+#line 228
+        result_1 = _S13;
+
+#line 228
+        i_2 = _S14;
+
+#line 228
+    }
+
+
+
+    return result_1;
+}
+
+
+#line 128
+uint permute_swap01_0(uint x_4)
+{
+    return x_4 ^ ((~(x_4 >> 1)) & 1431655765U);
+}
+
+uint permute_swap02_0(uint x_5)
+{
+    return x_5 ^ ((~(x_5 << 1)) & 2863311530U);
+}
+
+uint permute_swap12_0(uint x_6)
+{
+    uint non_zero_0 = (x_6 | (x_6 >> 1)) & 1431655765U;
+
+    return x_6 ^ (non_zero_0 | (non_zero_0 << 1));
+}
+
+uint permute_cycle_120_0(uint x_7)
+{
+
+    uint s_0 = x_7 + 1431655765U;
+    uint mask_0 = (s_0 & (s_0 >> 1)) & 1431655765U;
+    return s_0 & (~(mask_0 | (mask_0 << 1)));
+}
+
+uint permute_cycle_201_0(uint x_8)
+{
+
+#line 159
+    return permute_cycle_120_0(permute_cycle_120_0(x_8));
+}
+
+
+#line 235
+uint canonicalize_lut3_0(uint x_9)
+{
+
+#line 247
+    return min(min(lut3_key_0(x_9), lut3_key_0(permute_swap01_0(x_9))), min(min(lut3_key_0(permute_swap02_0(x_9)), lut3_key_0(permute_swap12_0(x_9))), min(lut3_key_0(permute_cycle_120_0(x_9)), lut3_key_0(permute_cycle_201_0(x_9)))));
+}
+
+
+#line 277
 uint count_diffs_0(uint val_0)
 {
     return bitCount((val_0 | (val_0 >> 1)) & 1431655765U);
 }
 
 
-#line 142
-uint best_perm_distance_0(uint x_2, uint y_0, out uint perm_1)
+#line 177
+uint best_perm_distance_s3_0(uint x_10, uint y_0, out uint perm_1)
 {
-    uint base_0 = x_2 ^ y_0;
+    uint base_0 = x_10 ^ y_0;
 
-    uint x_shr1_0 = x_2 >> 1;
-    uint nz_0 = (x_2 | x_shr1_0) & 1431655765U;
+    uint x_shr1_0 = x_10 >> 1;
+    uint nz_0 = (x_10 | x_shr1_0) & 1431655765U;
     uint nz_shl1_0 = nz_0 << 1;
 
     uint m01_0 = (~x_shr1_0) & 1431655765U;
 
-#line 166
-    uint best_0 = min(min(min(((count_diffs_0(base_0)) << 3) | 0U, ((count_diffs_0(base_0 ^ m01_0)) << 3) | 1U), min(((count_diffs_0(base_0 ^ ((~(x_2 << 1)) & 2863311530U))) << 3) | 2U, ((count_diffs_0(base_0 ^ (nz_0 | nz_shl1_0))) << 3) | 3U)), min(((count_diffs_0(base_0 ^ (m01_0 | nz_shl1_0))) << 3) | 4U, ((count_diffs_0(base_0 ^ (nz_0 | (((~x_2) & 1431655765U) << 1)))) << 3) | 5U));
+#line 201
+    uint best_0 = min(min(min(((count_diffs_0(base_0)) << 3) | 0U, ((count_diffs_0(base_0 ^ m01_0)) << 3) | 1U), min(((count_diffs_0(base_0 ^ ((~(x_10 << 1)) & 2863311530U))) << 3) | 2U, ((count_diffs_0(base_0 ^ (nz_0 | nz_shl1_0))) << 3) | 3U)), min(((count_diffs_0(base_0 ^ (m01_0 | nz_shl1_0))) << 3) | 4U, ((count_diffs_0(base_0 ^ (nz_0 | (((~x_10) & 1431655765U) << 1)))) << 3) | 5U));
 
     perm_1 = best_0 & 7U;
     return best_0 >> 3;
 }
 
 
-#line 125
-uint hamming_distance_2b_0(uint x_3, uint y_1)
+#line 282
+uint get_closest_seed3_0(uint input_0, out uint perm_2, out uint final_pattern_0)
 {
-    uint z_0 = x_3 ^ y_1;
+
+#line 283
+    uint key_0 = canonicalize_lut3_0(input_0);
+    uint seed_1 = ((g_astc_3p_4x4_lut_s3_0._data[uint(key_0 / 3U)]) >> (key_0 % 3U * 10U)) & 1023U;
+    uint pattern_0 = g_lut_0.lut3_0[seed_1];
+    uint _S15 = best_perm_distance_s3_0(input_0, g_lut_0.lut3_0[seed_1], perm_2);
+
+    final_pattern_0 = pattern_0;
+    return seed_1;
+}
+
+
+#line 250
+uint lut2_key_0(uint x_11)
+{
+
+#line 250
+    uint result_2 = 0U;
+
+#line 250
+    int i_3 = 15;
+
+#line 255
+    [[unroll]]
+    for(;;)
+    {
+
+#line 255
+        if(i_3 >= 0)
+        {
+        }
+        else
+        {
+
+#line 255
+            break;
+        }
+        uint _S16 = result_2 * 2U + ((x_11 >> (i_3 * 2)) & 3U);
+
+#line 255
+        int _S17 = i_3 - 1;
+
+#line 255
+        result_2 = _S16;
+
+#line 255
+        i_3 = _S17;
+
+#line 255
+    }
+
+
+
+    return result_2;
+}
+
+uint canonicalize_lut2_0(uint x_12)
+{
+
+
+    return min(lut2_key_0(x_12), lut2_key_0(permute_swap01_0(x_12)));
+}
+
+
+#line 207
+uint best_perm_distance_s2_0(uint x_13, uint y_1, out uint perm_3)
+{
+    uint base_1 = x_13 ^ y_1;
+
+#line 217
+    uint min01_0 = min(((count_diffs_0(base_1)) << 1) | 0U, ((count_diffs_0(base_1 ^ ((~(x_13 >> 1)) & 1431655765U))) << 1) | 1U);
+
+    perm_3 = min01_0 & 1U;
+    return min01_0 >> 1;
+}
+
+
+#line 292
+uint get_closest_seed2_0(uint input_1, out uint permutation_0, out uint final_pattern_1)
+{
+
+#line 293
+    uint key_1 = canonicalize_lut2_0(input_1);
+    uint seed_2 = ((g_astc_2p_4x4_lut_s2_0._data[uint(key_1 / 3U)]) >> (key_1 % 3U * 10U)) & 1023U;
+    uint pattern_1 = g_lut_0.lut2_0[seed_2];
+    uint _S18 = best_perm_distance_s2_0(input_1, g_lut_0.lut2_0[seed_2], permutation_0);
+
+    final_pattern_1 = pattern_1;
+    return seed_2;
+}
+
+
+#line 330
+void CompressedTextureBlock3P_swap_colors_0(inout CompressedTextureBlock3P_0 this_5, uint perm_4)
+{
+    vec3 old_ep0_0 = this_5.ep0_0;
+    vec3 old_ep1_0 = this_5.ep1_0;
+    vec3 old_ep2_0 = this_5.ep2_0;
+    vec3 old_ep3_0 = this_5.ep3_0;
+    vec3 old_ep4_0 = this_5.ep4_0;
+    vec3 old_ep5_0 = this_5.ep5_0;
+
+
+
+    bool _S19 = perm_4 == 1U;
+
+#line 341
+    bool from_pair1_0;
+
+#line 341
+    if(_S19)
+    {
+
+#line 341
+        from_pair1_0 = true;
+
+#line 341
+    }
+    else
+    {
+
+#line 341
+        from_pair1_0 = perm_4 == 5U;
+
+#line 341
+    }
+    bool _S20 = perm_4 == 2U;
+
+#line 342
+    bool from_pair2_0;
+
+#line 342
+    if(_S20)
+    {
+
+#line 342
+        from_pair2_0 = true;
+
+#line 342
+    }
+    else
+    {
+
+#line 342
+        from_pair2_0 = perm_4 == 4U;
+
+#line 342
+    }
+
+#line 342
+    vec3 _S21;
+    if(from_pair1_0)
+    {
+
+#line 343
+        _S21 = old_ep2_0;
+
+#line 343
+    }
+    else
+    {
+
+#line 343
+        if(from_pair2_0)
+        {
+
+#line 343
+            _S21 = old_ep4_0;
+
+#line 343
+        }
+        else
+        {
+
+#line 343
+            _S21 = old_ep0_0;
+
+#line 343
+        }
+
+#line 343
+    }
+
+#line 343
+    this_5.ep0_0 = _S21;
+    if(from_pair1_0)
+    {
+
+#line 344
+        _S21 = old_ep3_0;
+
+#line 344
+    }
+    else
+    {
+
+#line 344
+        if(from_pair2_0)
+        {
+
+#line 344
+            _S21 = old_ep5_0;
+
+#line 344
+        }
+        else
+        {
+
+#line 344
+            _S21 = old_ep1_0;
+
+#line 344
+        }
+
+#line 344
+    }
+
+#line 344
+    this_5.ep1_0 = _S21;
+
+#line 344
+    bool from_pair0_0;
+
+
+
+    if(_S19)
+    {
+
+#line 348
+        from_pair0_0 = true;
+
+#line 348
+    }
+    else
+    {
+
+#line 348
+        from_pair0_0 = perm_4 == 4U;
+
+#line 348
+    }
+    bool _S22 = perm_4 == 3U;
+
+#line 349
+    if(_S22)
+    {
+
+#line 349
+        from_pair2_0 = true;
+
+#line 349
+    }
+    else
+    {
+
+#line 349
+        from_pair2_0 = perm_4 == 5U;
+
+#line 349
+    }
+    if(from_pair0_0)
+    {
+
+#line 350
+        _S21 = old_ep0_0;
+
+#line 350
+    }
+    else
+    {
+
+#line 350
+        if(from_pair2_0)
+        {
+
+#line 350
+            _S21 = old_ep4_0;
+
+#line 350
+        }
+        else
+        {
+
+#line 350
+            _S21 = old_ep2_0;
+
+#line 350
+        }
+
+#line 350
+    }
+
+#line 350
+    this_5.ep2_0 = _S21;
+    if(from_pair0_0)
+    {
+
+#line 351
+        _S21 = old_ep1_0;
+
+#line 351
+    }
+    else
+    {
+
+#line 351
+        if(from_pair2_0)
+        {
+
+#line 351
+            _S21 = old_ep5_0;
+
+#line 351
+        }
+        else
+        {
+
+#line 351
+            _S21 = old_ep3_0;
+
+#line 351
+        }
+
+#line 351
+    }
+
+#line 351
+    this_5.ep3_0 = _S21;
+
+
+
+    if(_S20)
+    {
+
+#line 355
+        from_pair0_0 = true;
+
+#line 355
+    }
+    else
+    {
+
+#line 355
+        from_pair0_0 = perm_4 == 5U;
+
+#line 355
+    }
+    if(_S22)
+    {
+
+#line 356
+        from_pair1_0 = true;
+
+#line 356
+    }
+    else
+    {
+
+#line 356
+        from_pair1_0 = perm_4 == 4U;
+
+#line 356
+    }
+    if(from_pair0_0)
+    {
+
+#line 357
+        _S21 = old_ep0_0;
+
+#line 357
+    }
+    else
+    {
+
+#line 357
+        if(from_pair1_0)
+        {
+
+#line 357
+            _S21 = old_ep2_0;
+
+#line 357
+        }
+        else
+        {
+
+#line 357
+            _S21 = old_ep4_0;
+
+#line 357
+        }
+
+#line 357
+    }
+
+#line 357
+    this_5.ep4_0 = _S21;
+    if(from_pair0_0)
+    {
+
+#line 358
+        _S21 = old_ep1_0;
+
+#line 358
+    }
+    else
+    {
+
+#line 358
+        if(from_pair1_0)
+        {
+
+#line 358
+            _S21 = old_ep3_0;
+
+#line 358
+        }
+        else
+        {
+
+#line 358
+            _S21 = old_ep5_0;
+
+#line 358
+        }
+
+#line 358
+    }
+
+#line 358
+    this_5.ep5_0 = _S21;
+    return;
+}
+
+
+#line 369
+void CompressedTextureBlock3P_snap_0(inout CompressedTextureBlock3P_0 this_6)
+{
+    uint raw_map_2 = CompressedTextureBlock3P_pack_partition_indices_0(this_6);
+    uint permutation_1 = 0U;
+    uint final_mask_0 = 0U;
+
+#line 373
+    uint closest_seed_0;
+
+    if((this_6.max_partitions_1) == 3U)
+    {
+        uint _S23 = get_closest_seed3_0(raw_map_2, permutation_1, final_mask_0);
+
+#line 377
+        closest_seed_0 = _S23;
+
+#line 375
+    }
+    else
+    {
+
+        uint _S24 = get_closest_seed2_0(raw_map_2, permutation_1, final_mask_0);
+
+#line 379
+        closest_seed_0 = _S24;
+
+#line 375
+    }
+
+#line 382
+    this_6.astc_seed_0 = closest_seed_0;
+    this_6.astc_partition_map_0 = final_mask_0;
+    this_6.ideal_partition_map_0 = raw_map_2;
+    this_6.perm_0 = permutation_1;
+
+
+    CompressedTextureBlock3P_swap_colors_0(this_6, permutation_1);
+
+#line 388
+    int i_4 = 0;
+    for(;;)
+    {
+
+#line 389
+        if(i_4 < 16)
+        {
+        }
+        else
+        {
+
+#line 389
+            break;
+        }
+        this_6.partition_index_0.data_1[i_4] = int((final_mask_0 >> (2 * i_4)) & 3U);
+
+#line 389
+        i_4 = i_4 + 1;
+
+#line 389
+    }
+
+
+
+    return;
+}
+
+
+#line 269
+uint hamming_distance_2b_0(uint x_14, uint y_2)
+{
+    uint z_0 = x_14 ^ y_2;
 
 
     return bitCount((z_0 | (z_0 >> 1)) & 1431655765U);
 }
 
 
-#line 233
-uvec2 get_closest_seed_0(uint input_0, bool can_permute_0)
+#line 543
+TextureBlock_0 CompressedTextureBlock3P_reconstruct_0(CompressedTextureBlock3P_0 this_7)
 {
-
-#line 233
-    uint best_dist_0 = 16U;
-
-#line 233
-    uint closest_0 = 0U;
-
-#line 233
-    uint best_perm_0 = 0U;
-
-#line 233
-    int seed_1 = 0;
-
-#line 239
-    [[unroll]]
-    for(;;)
+    if(g_params_0.debug_reconstruction_0)
     {
 
-#line 239
-        if(seed_1 < 1024)
-        {
-        }
-        else
-        {
+#line 546
+        TextureBlock_0 outputBlock_1;
 
-#line 239
-            break;
-        }
-
-#line 240
-        uint pattern_0 = g_lut_0.lut3_0[seed_1];
-
-        uint perm_2 = 0U;
-
-#line 242
-        uint dist_1;
-        if(can_permute_0)
+#line 546
+        int i_5 = 0;
+        for(;;)
         {
 
-#line 243
-            uint _S13 = best_perm_distance_0(input_0, pattern_0, perm_2);
-
-#line 243
-            dist_1 = _S13;
-
-#line 243
-        }
-        else
-        {
-
-#line 243
-            dist_1 = hamming_distance_2b_0(input_0, pattern_0);
-
-#line 243
-        }
-
-#line 243
-        bool _S14;
-
-
-        if(dist_1 < best_dist_0)
-        {
-
-#line 246
-            _S14 = pattern_0 != 0U;
-
-#line 246
-        }
-        else
-        {
-
-#line 246
-            _S14 = false;
-
-#line 246
-        }
-
-#line 246
-        bool _S15;
-
-#line 246
-        if(_S14)
-        {
-
-#line 246
-            _S15 = pattern_0 != 1431655765U;
-
-#line 246
-        }
-        else
-        {
-
-#line 246
-            _S15 = false;
-
-#line 246
-        }
-
-#line 246
-        bool _S16;
-
-#line 246
-        if(_S15)
-        {
-
-#line 246
-            _S16 = pattern_0 != 2863311530U;
-
-#line 246
-        }
-        else
-        {
-
-#line 246
-            _S16 = false;
-
-#line 246
-        }
-
-#line 246
-        if(_S16)
-        {
-
-#line 247
-            uint _S17 = uint(seed_1);
-
-#line 247
-            best_dist_0 = dist_1;
-
-#line 247
-            closest_0 = _S17;
-
-#line 247
-            best_perm_0 = perm_2;
-
-#line 246
-        }
-
-#line 239
-        seed_1 = seed_1 + 1;
-
-#line 239
-    }
-
-#line 252
-    return uvec2(closest_0, best_perm_0);
-}
-
-
-#line 276
-void swap_0(uint perm_3, inout CompressedTextureBlock3P_0 blockCoefficients_1)
-{
-    vec3 ep0_3 = blockCoefficients_1.ep0_0;
-    vec3 ep1_3 = blockCoefficients_1.ep1_0;
-    vec3 ep2_2 = blockCoefficients_1.ep2_0;
-    vec3 ep3_2 = blockCoefficients_1.ep3_0;
-    vec3 ep4_2 = blockCoefficients_1.ep4_0;
-    vec3 ep5_2 = blockCoefficients_1.ep5_0;
-
-#line 296
-    if(perm_3 == 1U)
-    {
-        blockCoefficients_1.ep0_0 = ep2_2;
-        blockCoefficients_1.ep1_0 = ep3_2;
-        blockCoefficients_1.ep2_0 = ep0_3;
-        blockCoefficients_1.ep3_0 = ep1_3;
-
-#line 296
-    }
-    else
-    {
-
-
-
-        if(perm_3 == 2U)
-        {
-            blockCoefficients_1.ep0_0 = ep4_2;
-            blockCoefficients_1.ep1_0 = ep5_2;
-            blockCoefficients_1.ep4_0 = ep0_3;
-            blockCoefficients_1.ep5_0 = ep1_3;
-
-#line 302
-        }
-        else
-        {
-
-
-
-            if(perm_3 == 3U)
+#line 547
+            if(i_5 < 16)
             {
-                blockCoefficients_1.ep2_0 = ep4_2;
-                blockCoefficients_1.ep3_0 = ep5_2;
-                blockCoefficients_1.ep4_0 = ep2_2;
-                blockCoefficients_1.ep5_0 = ep3_2;
-
-#line 308
             }
             else
             {
 
+#line 547
+                break;
+            }
+
+            int partition_1 = clamp(int(float(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(this_7.partition_index_0, i_5))), 0, 2);
+
+#line 550
+            vec3 c_0;
 
 
-                if(perm_3 == 4U)
+            if(partition_1 == 0)
+            {
+
+#line 553
+                c_0 = vec3(1.0, 1.0, 1.0);
+
+#line 553
+            }
+            else
+            {
+
+#line 553
+                if(partition_1 == 1)
                 {
-                    blockCoefficients_1.ep0_0 = ep4_2;
-                    blockCoefficients_1.ep1_0 = ep5_2;
-                    blockCoefficients_1.ep2_0 = ep0_3;
-                    blockCoefficients_1.ep3_0 = ep1_3;
-                    blockCoefficients_1.ep4_0 = ep2_2;
-                    blockCoefficients_1.ep5_0 = ep3_2;
 
-#line 314
+#line 553
+                    c_0 = vec3(0.5, 0.5, 0.5);
+
+#line 553
                 }
                 else
                 {
 
-#line 322
-                    if(perm_3 == 5U)
-                    {
-                        blockCoefficients_1.ep0_0 = ep2_2;
-                        blockCoefficients_1.ep1_0 = ep3_2;
-                        blockCoefficients_1.ep2_0 = ep4_2;
-                        blockCoefficients_1.ep3_0 = ep5_2;
-                        blockCoefficients_1.ep4_0 = ep0_3;
-                        blockCoefficients_1.ep5_0 = ep1_3;
+#line 553
+                    c_0 = vec3(0.0, 0.0, 0.0);
 
-#line 322
-                    }
-
-#line 314
+#line 553
                 }
 
-#line 308
+#line 553
             }
+            outputBlock_1.pixels_0[i_5] = c_0;
 
-#line 302
+#line 547
+            i_5 = i_5 + 1;
+
+#line 547
         }
 
-#line 296
+#line 556
+        return outputBlock_1;
     }
-
-#line 331
-    return;
+    return CompressedTextureBlock3P_decompress3P_0(this_7);
 }
 
 
-#line 340
-void snap_1(inout CompressedTextureBlock3P_0 block_0, bool can_permute_1)
+#line 684
+void CompressedTextureBlock3P_random_initialize_0(inout CompressedTextureBlock3P_0 _S25, uint _S26, inout PCG32_0 _S27)
 {
-    uint raw_map_2 = pack_partition_indices_to_mask_0(block_0.partition_logits_0.data_0);
 
-    uvec2 search_0 = get_closest_seed_0(raw_map_2, can_permute_1);
-    uint closest_seed_0 = search_0.x;
-    uint perm_4 = search_0.y;
-    uint final_mask_0 = g_lut_0.lut3_0[closest_seed_0];
+#line 502
+    uint _S28 = PCG32_nextUint_0(_S27);
 
-    block_0.astc_seed_0 = closest_seed_0;
-    block_0.astc_partition_map_0 = final_mask_0;
-    block_0.ideal_partition_map_0 = raw_map_2;
-    block_0.perm_0 = perm_4;
+#line 502
+    _S25.ep0_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S28 % 16U];
+    uint _S29 = PCG32_nextUint_0(_S27);
 
+#line 503
+    _S25.ep1_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S29 % 16U];
 
-    swap_0(perm_4, block_0);
-
-#line 355
-    int i_2 = 0;
+#line 503
+    int i_6 = 0;
     for(;;)
     {
 
-#line 356
-        if(i_2 < 16)
+#line 504
+        if(i_6 < 8)
         {
         }
         else
         {
 
-#line 356
+#line 504
             break;
         }
-        block_0.partition_logits_0.data_0[i_2] = float((final_mask_0 >> (2 * i_2)) & 3U);
 
-#line 356
-        i_2 = i_2 + 1;
+#line 505
+        uint _S30 = PCG32_nextUint_0(_S27);
 
-#line 356
+#line 505
+        vec3 _S31 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S30 % 16U];
+
+#line 505
+        _S25.ep1_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S30 % 16U];
+        vec3 d_0 = _S31 - _S25.ep0_0;
+        if((dot(d_0, d_0)) > 0.30000001192092896)
+        {
+
+#line 508
+            break;
+        }
+
+#line 504
+        i_6 = i_6 + 1;
+
+#line 504
     }
 
+#line 504
+    i_6 = 0;
+
+#line 511
+    for(;;)
+    {
+
+#line 511
+        if(i_6 < 8)
+        {
+        }
+        else
+        {
+
+#line 511
+            break;
+        }
+
+#line 512
+        uint _S32 = PCG32_nextUint_0(_S27);
+
+#line 512
+        vec3 _S33 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S32 % 16U];
+
+#line 512
+        _S25.ep2_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S32 % 16U];
+        if((dist_0(_S33, _S25.ep0_0, _S25.ep1_0)) > 0.30000001192092896)
+        {
+
+#line 514
+            break;
+        }
+
+#line 511
+        i_6 = i_6 + 1;
+
+#line 511
+    }
+
+#line 511
+    i_6 = 0;
+
+#line 517
+    for(;;)
+    {
+
+#line 517
+        if(i_6 < 8)
+        {
+        }
+        else
+        {
+
+#line 517
+            break;
+        }
+
+#line 518
+        uint _S34 = PCG32_nextUint_0(_S27);
+
+#line 518
+        vec3 _S35 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S34 % 16U];
+
+#line 518
+        _S25.ep3_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S34 % 16U];
+        if((dist_0(_S35, _S25.ep0_0, _S25.ep1_0)) > 0.30000001192092896)
+        {
+
+#line 520
+            break;
+        }
+
+#line 517
+        i_6 = i_6 + 1;
+
+#line 517
+    }
+
+#line 517
+    i_6 = 0;
+
+#line 523
+    for(;;)
+    {
+
+#line 523
+        if(i_6 < 8)
+        {
+        }
+        else
+        {
+
+#line 523
+            break;
+        }
+
+#line 524
+        uint _S36 = PCG32_nextUint_0(_S27);
+
+#line 524
+        vec3 _S37 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S36 % 16U];
+
+#line 524
+        _S25.ep4_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S36 % 16U];
+        if((dist_0(_S37, _S25.ep0_0, _S25.ep1_0)) <= 0.30000001192092896)
+        {
+
+#line 526
+            i_6 = i_6 + 1;
+
+#line 523
+            continue;
+        }
 
 
+
+        if((dist_0(_S25.ep4_0, _S25.ep2_0, _S25.ep3_0)) > 0.30000001192092896)
+        {
+
+#line 529
+            break;
+        }
+
+#line 523
+        i_6 = i_6 + 1;
+
+#line 523
+    }
+
+#line 523
+    i_6 = 0;
+
+#line 532
+    for(;;)
+    {
+
+#line 532
+        if(i_6 < 8)
+        {
+        }
+        else
+        {
+
+#line 532
+            break;
+        }
+
+#line 533
+        uint _S38 = PCG32_nextUint_0(_S27);
+
+#line 533
+        vec3 _S39 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S38 % 16U];
+
+#line 533
+        _S25.ep5_0 = g_groundtruth_0._data[uint(_S26)].pixels_0[_S38 % 16U];
+        if((dist_0(_S39, _S25.ep0_0, _S25.ep1_0)) <= 0.30000001192092896)
+        {
+
+#line 535
+            i_6 = i_6 + 1;
+
+#line 532
+            continue;
+        }
+
+
+
+        if((dist_0(_S25.ep5_0, _S25.ep2_0, _S25.ep3_0)) > 0.30000001192092896)
+        {
+
+#line 538
+            break;
+        }
+
+#line 532
+        i_6 = i_6 + 1;
+
+#line 532
+    }
+
+#line 541
     return;
 }
 
 
-#line 13393 4
-float saturate_1(float x_4)
+#line 2675 3
+uint solve_pca_eps_0(CompressedTextureBlock3P_0 _S40, inout vec3 _S41, inout vec3 _S42, uint _S43, int _S44)
 {
 
-#line 13401
-    return clamp(x_4, 0.0, 1.0);
+#line 565 0
+    const vec3 _S45 = vec3(0.17000000178813934, 0.82999998331069946, 0.37999999523162842);
+    vec3 _S46 = vec3(ivec3(0));
+
+#line 566
+    int i_7 = 0;
+
+#line 566
+    vec3 centroid_0 = _S46;
+
+#line 566
+    uint count_0 = 0U;
+
+
+
+    [[unroll]]
+    for(;;)
+    {
+
+#line 570
+        if(i_7 < 16)
+        {
+        }
+        else
+        {
+
+#line 570
+            break;
+        }
+        if((NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S40.partition_index_0, i_7)) == _S44)
+        {
+
+            uint count_1 = count_0 + 1U;
+
+#line 575
+            centroid_0 = centroid_0 + g_groundtruth_0._data[uint(_S43)].pixels_0[i_7];
+
+#line 575
+            count_0 = count_1;
+
+#line 572
+        }
+
+#line 570
+        i_7 = i_7 + 1;
+
+#line 570
+    }
+
+#line 579
+    if(count_0 <= 1U)
+    {
+
+#line 580
+        if(count_0 > 0U)
+        {
+
+#line 580
+            centroid_0 = centroid_0 / float(count_0);
+
+#line 580
+        }
+        else
+        {
+
+#line 580
+            centroid_0 = _S46;
+
+#line 580
+        }
+
+#line 580
+        vec3 _S47 = saturate_0(centroid_0);
+
+#line 580
+        _S41 = _S47;
+        _S42 = _S47;
+        return count_0;
+    }
+
+    vec3 centroid_1 = centroid_0 / float(count_0);
+
+#line 585
+    i_7 = 0;
+
+#line 585
+    float xx_0 = 0.0;
+
+#line 585
+    float xy_0 = 0.0;
+
+#line 585
+    float xz_0 = 0.0;
+
+#line 585
+    float yy_0 = 0.0;
+
+#line 585
+    float yz_0 = 0.0;
+
+#line 585
+    float zz_0 = 0.0;
+
+
+
+    [[unroll]]
+    for(;;)
+    {
+
+#line 589
+        if(i_7 < 16)
+        {
+        }
+        else
+        {
+
+#line 589
+            break;
+        }
+        if((NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S40.partition_index_0, i_7)) == _S44)
+        {
+            vec3 d_1 = g_groundtruth_0._data[uint(_S43)].pixels_0[i_7] - centroid_1;
+            float _S48 = d_1.x;
+            float _S49 = d_1.y;
+
+#line 595
+            float xy_1 = xy_0 + _S48 * _S49;
+            float _S50 = d_1.z;
+
+#line 596
+            float xz_1 = xz_0 + _S48 * _S50;
+            float yy_1 = yy_0 + _S49 * _S49;
+            float yz_1 = yz_0 + _S49 * _S50;
+            float zz_1 = zz_0 + _S50 * _S50;
+
+#line 599
+            xx_0 = xx_0 + _S48 * _S48;
+
+#line 599
+            xy_0 = xy_1;
+
+#line 599
+            xz_0 = xz_1;
+
+#line 599
+            yy_0 = yy_1;
+
+#line 599
+            yz_0 = yz_1;
+
+#line 599
+            zz_0 = zz_1;
+
+#line 591
+        }
+
+#line 589
+        i_7 = i_7 + 1;
+
+#line 589
+    }
+
+#line 589
+    vec3 axis_0 = _S45;
+
+#line 589
+    int iter_0 = 0;
+
+#line 605
+    [[unroll]]
+    for(;;)
+    {
+
+#line 605
+        if(iter_0 < 4)
+        {
+        }
+        else
+        {
+
+#line 605
+            break;
+        }
+        vec3 new_axis_0;
+        float _S51 = axis_0.x;
+
+#line 608
+        float _S52 = axis_0.y;
+
+#line 608
+        float _S53 = axis_0.z;
+
+#line 608
+        new_axis_0[0] = xx_0 * _S51 + xy_0 * _S52 + xz_0 * _S53;
+        new_axis_0[1] = xy_0 * _S51 + yy_0 * _S52 + yz_0 * _S53;
+        new_axis_0[2] = xz_0 * _S51 + yz_0 * _S52 + zz_0 * _S53;
+        vec3 _S54 = new_axis_0;
+
+#line 605
+        int _S55 = iter_0 + 1;
+
+#line 605
+        axis_0 = _S54;
+
+#line 605
+        iter_0 = _S55;
+
+#line 605
+    }
+
+#line 614
+    if((dot(axis_0, axis_0)) < 9.99999993922529029e-09)
+    {
+
+#line 615
+        vec3 _S56 = saturate_0(centroid_1);
+
+#line 615
+        _S41 = _S56;
+        _S42 = _S56;
+        return count_0;
+    }
+
+    vec3 axis_1 = normalize(axis_0);
+
+#line 620
+    float min_t_0 = 1000.0;
+
+#line 620
+    float max_t_0 = -1000.0;
+
+#line 620
+    i_7 = 0;
+
+#line 625
+    [[unroll]]
+    for(;;)
+    {
+
+#line 625
+        if(i_7 < 16)
+        {
+        }
+        else
+        {
+
+#line 625
+            break;
+        }
+        if((NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S40.partition_index_0, i_7)) == _S44)
+        {
+
+            float t_0 = dot(g_groundtruth_0._data[uint(_S43)].pixels_0[i_7] - centroid_1, axis_1);
+
+            float _S57 = max(max_t_0, t_0);
+
+#line 632
+            min_t_0 = min(min_t_0, t_0);
+
+#line 632
+            max_t_0 = _S57;
+
+#line 627
+        }
+
+#line 625
+        i_7 = i_7 + 1;
+
+#line 625
+    }
+
+#line 636
+    _S41 = saturate_0(centroid_1 + axis_1 * min_t_0);
+    _S42 = saturate_0(centroid_1 + axis_1 * max_t_0);
+    return count_0;
 }
 
 
-#line 481 0
-TextureBlock_0 reconstruct_0(CompressedTextureBlock3P_0 blockCoefficients_2, uint blockIdx_0)
+#line 638
+void solve_aabb_eps_0(CompressedTextureBlock3P_0 _S58, inout vec3 _S59, inout vec3 _S60, uint _S61, int _S62)
 {
 
-#line 501
-    return decompress3P_0(blockCoefficients_2);
+
+
+    vec3 _S63 = vec3(ivec3(1));
+
+#line 643
+    vec3 _S64 = vec3(ivec3(0));
+
+#line 643
+    vec3 min_ep_0 = _S63;
+
+#line 643
+    vec3 max_ep_0 = _S64;
+
+#line 643
+    int i_8 = 0;
+
+
+    [[unroll]]
+    for(;;)
+    {
+
+#line 646
+        if(i_8 < 16)
+        {
+        }
+        else
+        {
+
+#line 646
+            break;
+        }
+        bool inlier_0 = (NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S58.partition_index_0, i_8)) == _S62;
+
+#line 648
+        vec3 _S65;
+        if(inlier_0)
+        {
+
+#line 649
+            _S65 = g_groundtruth_0._data[uint(_S61)].pixels_0[i_8];
+
+#line 649
+        }
+        else
+        {
+
+#line 649
+            _S65 = _S63;
+
+#line 649
+        }
+
+#line 649
+        vec3 _S66 = min(_S65, min_ep_0);
+
+#line 649
+        vec3 _S67;
+        if(inlier_0)
+        {
+
+#line 650
+            _S67 = g_groundtruth_0._data[uint(_S61)].pixels_0[i_8];
+
+#line 650
+        }
+        else
+        {
+
+#line 650
+            _S67 = _S64;
+
+#line 650
+        }
+
+#line 650
+        vec3 _S68 = max(_S67, max_ep_0);
+
+#line 646
+        int _S69 = i_8 + 1;
+
+#line 646
+        min_ep_0 = _S66;
+
+#line 646
+        max_ep_0 = _S68;
+
+#line 646
+        i_8 = _S69;
+
+#line 646
+    }
+
+#line 653
+    _S59 = saturate_0(min_ep_0);
+    _S60 = saturate_0(max_ep_0);
+    return;
 }
 
 
-#line 514
+#line 655
 struct DiffPair_CompressedTextureBlock3P_0
 {
     CompressedTextureBlock3P_0 primal_0;
@@ -994,253 +2022,259 @@ struct DiffPair_CompressedTextureBlock3P_0
 };
 
 
-#line 576
-vec3 s_primal_ctx_lerp_0(vec3 _S18, vec3 _S19, vec3 _S20)
+#line 731
+vec3 s_primal_ctx_lerp_0(vec3 _S70, vec3 _S71, vec3 _S72)
 {
 
-#line 576
-    return mix(_S18, _S19, _S20);
+#line 731
+    return mix(_S70, _S71, _S72);
 }
 
 
-#line 576
-TextureBlock_0 s_primal_ctx_decompress3P_0(CompressedTextureBlock3P_0 dpblockCoefficients_0)
+#line 731
+TextureBlock_0 s_primal_ctx_CompressedTextureBlock3P_decompress3P_0(CompressedTextureBlock3P_0 dpthis_0)
 {
 
-#line 451
-    vec3 _S21 = vec3(0.0);
+#line 485
+    vec3 _S73 = vec3(0.0);
 
-#line 451
-    vec3  _S22[16] = { _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21, _S21 };
+#line 485
+    vec3  _S74[16] = { _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73, _S73 };
 
-#line 451
+
+
+    uint _S75 = dpthis_0.max_partitions_1 - 1U;
+
+#line 489
     bool _runFlag_0 = true;
 
-#line 451
-    uint i_3 = 0U;
+#line 489
+    uint i_9 = 0U;
 
-#line 451
-    TextureBlock_0 outputBlock_1;
+#line 489
+    TextureBlock_0 outputBlock_2;
 
-#line 451
-    outputBlock_1.pixels_0 = _S22;
+#line 489
+    outputBlock_2.pixels_0 = _S74;
 
-#line 451
+#line 489
     int _pc_0 = 0;
+
+#line 486
     for(;;)
     {
 
-#line 452
+#line 486
         if(_runFlag_0)
         {
         }
         else
         {
 
-#line 452
+#line 486
             break;
         }
 
-#line 452
-        int _S23;
+#line 486
+        int _S76;
 
-#line 452
-        if(i_3 < 16U)
+#line 486
+        if(i_9 < 16U)
         {
-            int _S24 = int(i_3);
+            int _S77 = int(i_9);
 
-#line 454
-            float _S25 = NonDifferentiableWeights_operatorx5Bx5D_get_0(dpblockCoefficients_0.weights_0, _S24);
-            int partition_1 = int(NonDifferentiableWeights_operatorx5Bx5D_get_0(dpblockCoefficients_0.partition_logits_0, _S24));
-            bool _S26 = partition_1 == 0;
+#line 488
+            float _S78 = NonDifferentiableWeights_operatorx5Bx5D_get_0(dpthis_0.weights_0, _S77);
+            uint partition_2 = clamp(uint(int(float(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(dpthis_0.partition_index_0, _S77)))), 0U, _S75);
+            bool _S79 = partition_2 == 0U;
 
-#line 456
+#line 490
             vec3 e0_1;
 
-#line 456
-            if(_S26)
+#line 490
+            if(_S79)
             {
 
-#line 456
-                e0_1 = dpblockCoefficients_0.ep0_0;
+#line 490
+                e0_1 = dpthis_0.ep0_0;
 
-#line 456
+#line 490
             }
             else
             {
 
-#line 456
-                if(partition_1 == 1)
+#line 490
+                if(partition_2 == 1U)
                 {
 
-#line 456
-                    e0_1 = dpblockCoefficients_0.ep2_0;
+#line 490
+                    e0_1 = dpthis_0.ep2_0;
 
-#line 456
+#line 490
                 }
                 else
                 {
 
-#line 456
-                    e0_1 = dpblockCoefficients_0.ep4_0;
+#line 490
+                    e0_1 = dpthis_0.ep4_0;
 
-#line 456
+#line 490
                 }
 
-#line 456
+#line 490
             }
 
-#line 456
+#line 490
             vec3 e1_1;
-            if(_S26)
+            if(_S79)
             {
 
-#line 457
-                e1_1 = dpblockCoefficients_0.ep1_0;
+#line 491
+                e1_1 = dpthis_0.ep1_0;
 
-#line 457
+#line 491
             }
             else
             {
 
-#line 457
-                if(partition_1 == 1)
+#line 491
+                if(partition_2 == 1U)
                 {
 
-#line 457
-                    e1_1 = dpblockCoefficients_0.ep3_0;
+#line 491
+                    e1_1 = dpthis_0.ep3_0;
 
-#line 457
+#line 491
                 }
                 else
                 {
 
-#line 457
-                    e1_1 = dpblockCoefficients_0.ep5_0;
+#line 491
+                    e1_1 = dpthis_0.ep5_0;
 
-#line 457
+#line 491
                 }
 
-#line 457
+#line 491
             }
 
-#line 457
-            vec3 _S27 = s_primal_ctx_lerp_0(e0_1, e1_1, vec3(_S25));
+#line 491
+            vec3 _S80 = s_primal_ctx_lerp_0(e0_1, e1_1, vec3(_S78));
 
-#line 457
-            TextureBlock_0 _S28 = outputBlock_1;
+#line 491
+            TextureBlock_0 _S81 = outputBlock_2;
 
-#line 457
-            _S28.pixels_0[i_3] = _S27;
+#line 491
+            _S81.pixels_0[i_9] = _S80;
 
-#line 457
-            _S23 = 1;
+#line 491
+            _S76 = 1;
 
-#line 457
-            outputBlock_1 = _S28;
+#line 491
+            outputBlock_2 = _S81;
 
-#line 457
+#line 491
         }
         else
         {
 
-#line 457
-            _S23 = 0;
+#line 491
+            _S76 = 0;
 
-#line 457
+#line 491
         }
 
-#line 457
-        if(_S23 != 1)
+#line 491
+        if(_S76 != 1)
         {
 
-#line 457
+#line 491
             _runFlag_0 = false;
 
-#line 457
+#line 491
         }
 
-#line 457
+#line 491
         if(_runFlag_0)
         {
 
-#line 457
-            i_3 = i_3 + 1U;
+#line 491
+            i_9 = i_9 + 1U;
 
-#line 457
+#line 491
         }
 
-#line 457
+#line 491
         _pc_0 = _pc_0 + 1;
 
-#line 452
+#line 486
     }
 
-#line 452
-    return outputBlock_1;
+#line 486
+    return outputBlock_2;
 }
 
 
-#line 452
+#line 486
 TextureBlock_0 TextureBlock_x24_syn_dzero_0()
 {
 
-#line 452
-    TextureBlock_0 result_1;
+#line 486
+    TextureBlock_0 result_3;
 
-#line 2239 2
-    vec3 _S29 = vec3(0.0);
-
-#line 2239
-    result_1.pixels_0[0] = _S29;
+#line 2239 3
+    vec3 _S82 = vec3(0.0);
 
 #line 2239
-    result_1.pixels_0[1] = _S29;
+    result_3.pixels_0[0] = _S82;
 
 #line 2239
-    result_1.pixels_0[2] = _S29;
+    result_3.pixels_0[1] = _S82;
 
 #line 2239
-    result_1.pixels_0[3] = _S29;
+    result_3.pixels_0[2] = _S82;
 
 #line 2239
-    result_1.pixels_0[4] = _S29;
+    result_3.pixels_0[3] = _S82;
 
 #line 2239
-    result_1.pixels_0[5] = _S29;
+    result_3.pixels_0[4] = _S82;
 
 #line 2239
-    result_1.pixels_0[6] = _S29;
+    result_3.pixels_0[5] = _S82;
 
 #line 2239
-    result_1.pixels_0[7] = _S29;
+    result_3.pixels_0[6] = _S82;
 
 #line 2239
-    result_1.pixels_0[8] = _S29;
+    result_3.pixels_0[7] = _S82;
 
 #line 2239
-    result_1.pixels_0[9] = _S29;
+    result_3.pixels_0[8] = _S82;
 
 #line 2239
-    result_1.pixels_0[10] = _S29;
+    result_3.pixels_0[9] = _S82;
 
 #line 2239
-    result_1.pixels_0[11] = _S29;
+    result_3.pixels_0[10] = _S82;
 
 #line 2239
-    result_1.pixels_0[12] = _S29;
+    result_3.pixels_0[11] = _S82;
 
 #line 2239
-    result_1.pixels_0[13] = _S29;
+    result_3.pixels_0[12] = _S82;
 
 #line 2239
-    result_1.pixels_0[14] = _S29;
+    result_3.pixels_0[13] = _S82;
 
 #line 2239
-    result_1.pixels_0[15] = _S29;
+    result_3.pixels_0[14] = _S82;
 
 #line 2239
-    return result_1;
+    result_3.pixels_0[15] = _S82;
+
+#line 2239
+    return result_3;
 }
 
 
@@ -1249,380 +2283,383 @@ TextureBlock_0 TextureBlock_x24_syn_dadd_0(TextureBlock_0 SLANG_anonymous_0_0, T
 {
 
 #line 2239
-    TextureBlock_0 result_2;
+    TextureBlock_0 result_4;
 
 #line 2239
-    result_2.pixels_0[0] = SLANG_anonymous_0_0.pixels_0[0] + SLANG_anonymous_1_0.pixels_0[0];
+    result_4.pixels_0[0] = SLANG_anonymous_0_0.pixels_0[0] + SLANG_anonymous_1_0.pixels_0[0];
 
 #line 2239
-    result_2.pixels_0[1] = SLANG_anonymous_0_0.pixels_0[1] + SLANG_anonymous_1_0.pixels_0[1];
+    result_4.pixels_0[1] = SLANG_anonymous_0_0.pixels_0[1] + SLANG_anonymous_1_0.pixels_0[1];
 
 #line 2239
-    result_2.pixels_0[2] = SLANG_anonymous_0_0.pixels_0[2] + SLANG_anonymous_1_0.pixels_0[2];
+    result_4.pixels_0[2] = SLANG_anonymous_0_0.pixels_0[2] + SLANG_anonymous_1_0.pixels_0[2];
 
 #line 2239
-    result_2.pixels_0[3] = SLANG_anonymous_0_0.pixels_0[3] + SLANG_anonymous_1_0.pixels_0[3];
+    result_4.pixels_0[3] = SLANG_anonymous_0_0.pixels_0[3] + SLANG_anonymous_1_0.pixels_0[3];
 
 #line 2239
-    result_2.pixels_0[4] = SLANG_anonymous_0_0.pixels_0[4] + SLANG_anonymous_1_0.pixels_0[4];
+    result_4.pixels_0[4] = SLANG_anonymous_0_0.pixels_0[4] + SLANG_anonymous_1_0.pixels_0[4];
 
 #line 2239
-    result_2.pixels_0[5] = SLANG_anonymous_0_0.pixels_0[5] + SLANG_anonymous_1_0.pixels_0[5];
+    result_4.pixels_0[5] = SLANG_anonymous_0_0.pixels_0[5] + SLANG_anonymous_1_0.pixels_0[5];
 
 #line 2239
-    result_2.pixels_0[6] = SLANG_anonymous_0_0.pixels_0[6] + SLANG_anonymous_1_0.pixels_0[6];
+    result_4.pixels_0[6] = SLANG_anonymous_0_0.pixels_0[6] + SLANG_anonymous_1_0.pixels_0[6];
 
 #line 2239
-    result_2.pixels_0[7] = SLANG_anonymous_0_0.pixels_0[7] + SLANG_anonymous_1_0.pixels_0[7];
+    result_4.pixels_0[7] = SLANG_anonymous_0_0.pixels_0[7] + SLANG_anonymous_1_0.pixels_0[7];
 
 #line 2239
-    result_2.pixels_0[8] = SLANG_anonymous_0_0.pixels_0[8] + SLANG_anonymous_1_0.pixels_0[8];
+    result_4.pixels_0[8] = SLANG_anonymous_0_0.pixels_0[8] + SLANG_anonymous_1_0.pixels_0[8];
 
 #line 2239
-    result_2.pixels_0[9] = SLANG_anonymous_0_0.pixels_0[9] + SLANG_anonymous_1_0.pixels_0[9];
+    result_4.pixels_0[9] = SLANG_anonymous_0_0.pixels_0[9] + SLANG_anonymous_1_0.pixels_0[9];
 
 #line 2239
-    result_2.pixels_0[10] = SLANG_anonymous_0_0.pixels_0[10] + SLANG_anonymous_1_0.pixels_0[10];
+    result_4.pixels_0[10] = SLANG_anonymous_0_0.pixels_0[10] + SLANG_anonymous_1_0.pixels_0[10];
 
 #line 2239
-    result_2.pixels_0[11] = SLANG_anonymous_0_0.pixels_0[11] + SLANG_anonymous_1_0.pixels_0[11];
+    result_4.pixels_0[11] = SLANG_anonymous_0_0.pixels_0[11] + SLANG_anonymous_1_0.pixels_0[11];
 
 #line 2239
-    result_2.pixels_0[12] = SLANG_anonymous_0_0.pixels_0[12] + SLANG_anonymous_1_0.pixels_0[12];
+    result_4.pixels_0[12] = SLANG_anonymous_0_0.pixels_0[12] + SLANG_anonymous_1_0.pixels_0[12];
 
 #line 2239
-    result_2.pixels_0[13] = SLANG_anonymous_0_0.pixels_0[13] + SLANG_anonymous_1_0.pixels_0[13];
+    result_4.pixels_0[13] = SLANG_anonymous_0_0.pixels_0[13] + SLANG_anonymous_1_0.pixels_0[13];
 
 #line 2239
-    result_2.pixels_0[14] = SLANG_anonymous_0_0.pixels_0[14] + SLANG_anonymous_1_0.pixels_0[14];
+    result_4.pixels_0[14] = SLANG_anonymous_0_0.pixels_0[14] + SLANG_anonymous_1_0.pixels_0[14];
 
 #line 2239
-    result_2.pixels_0[15] = SLANG_anonymous_0_0.pixels_0[15] + SLANG_anonymous_1_0.pixels_0[15];
+    result_4.pixels_0[15] = SLANG_anonymous_0_0.pixels_0[15] + SLANG_anonymous_1_0.pixels_0[15];
 
 #line 2239
-    return result_2;
+    return result_4;
 }
 
 
 #line 2239
-void s_bwd_prop_lerp_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S30, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S31, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S32, vec3 _S33)
+void s_bwd_prop_lerp_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S83, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S84, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S85, vec3 _S86)
 {
 
 #line 2239
-    _d_lerp_vector_0(_S30, _S31, _S32, _S33);
+    _d_lerp_vector_0(_S83, _S84, _S85, _S86);
 
 #line 2239
     return;
 }
 
 
-#line 442 0
-void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblockCoefficients_1, TextureBlock_0 _s_dOut_0)
+#line 483 0
+void s_bwd_prop_CompressedTextureBlock3P_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpthis_1, TextureBlock_0 _s_dOut_0)
 {
 
-#line 442
-    vec3 _S34 = dpblockCoefficients_1.primal_0.ep0_0;
+#line 483
+    NonDifferentiableWeights_0 _S87 = dpthis_1.primal_0.weights_0;
 
-#line 442
-    vec3 _S35 = dpblockCoefficients_1.primal_0.ep1_0;
+#line 483
+    NonDifferentiableIntWeights_0 _S88 = dpthis_1.primal_0.partition_index_0;
 
-#line 442
-    vec3 _S36 = dpblockCoefficients_1.primal_0.ep2_0;
+#line 489
+    uint _S89 = dpthis_1.primal_0.max_partitions_1 - 1U;
 
-#line 442
-    vec3 _S37 = dpblockCoefficients_1.primal_0.ep3_0;
+#line 489
+    vec3 _S90 = dpthis_1.primal_0.ep0_0;
 
-#line 442
-    vec3 _S38 = dpblockCoefficients_1.primal_0.ep4_0;
+#line 489
+    vec3 _S91 = dpthis_1.primal_0.ep1_0;
 
-#line 442
-    vec3 _S39 = dpblockCoefficients_1.primal_0.ep5_0;
+#line 489
+    vec3 _S92 = dpthis_1.primal_0.ep2_0;
 
-#line 442
-    NonDifferentiableWeights_0 _S40 = dpblockCoefficients_1.primal_0.weights_0;
+#line 489
+    vec3 _S93 = dpthis_1.primal_0.ep4_0;
 
-#line 442
-    NonDifferentiableWeights_0 _S41 = dpblockCoefficients_1.primal_0.partition_logits_0;
+#line 489
+    vec3 _S94 = dpthis_1.primal_0.ep3_0;
 
-#line 2239 2
-    vec3 _S42 = vec3(0.0);
+#line 489
+    vec3 _S95 = dpthis_1.primal_0.ep5_0;
 
-#line 451 0
-    TextureBlock_0 _S43 = TextureBlock_x24_syn_dzero_0();
+#line 2239 3
+    vec3 _S96 = vec3(0.0);
 
-#line 451
-    TextureBlock_0 _S44 = TextureBlock_x24_syn_dadd_0(_s_dOut_0, _S43);
+#line 485 0
+    TextureBlock_0 _S97 = TextureBlock_x24_syn_dzero_0();
 
-#line 451
+#line 485
+    TextureBlock_0 _S98 = TextureBlock_x24_syn_dadd_0(_s_dOut_0, _S97);
+
+#line 485
     int _dc_0 = 16;
 
-#line 451
-    TextureBlock_0 _S45 = _S44;
+#line 485
+    TextureBlock_0 _S99 = _S98;
 
-#line 451
-    vec3 _S46 = _S42;
+#line 485
+    vec3 _S100 = _S96;
 
-#line 451
-    vec3 _S47 = _S42;
+#line 485
+    vec3 _S101 = _S96;
 
-#line 451
-    vec3 _S48 = _S42;
+#line 485
+    vec3 _S102 = _S96;
 
-#line 451
-    vec3 _S49 = _S42;
+#line 485
+    vec3 _S103 = _S96;
 
-#line 451
-    vec3 _S50 = _S42;
+#line 485
+    vec3 _S104 = _S96;
 
-#line 451
-    vec3 _S51 = _S42;
+#line 485
+    vec3 _S105 = _S96;
 
-#line 451
-    vec3 _S52 = _S42;
+#line 485
+    vec3 _S106 = _S96;
     for(;;)
     {
 
-#line 452
-        uint _S53 = uint(_dc_0);
+#line 486
+        uint _S107 = uint(_dc_0);
 
-#line 452
+#line 486
         if(_dc_0 >= 0)
         {
         }
         else
         {
 
-#line 452
+#line 486
             break;
         }
 
-#line 452
-        bool _S54 = _S53 < 16U;
+#line 486
+        bool _S108 = _S107 < 16U;
 
-#line 452
+#line 486
         vec3 e0_2;
 
-#line 452
+#line 486
         vec3 e1_2;
 
-#line 452
-        vec3 _S55;
+#line 486
+        vec3 _S109;
 
-#line 452
-        bool _S56;
+#line 486
+        bool _S110;
 
-#line 452
-        bool _S57;
+#line 486
+        bool _S111;
 
-#line 452
-        bool _S58;
+#line 486
+        bool _S112;
 
-#line 452
-        if(_S54)
+#line 486
+        if(_S108)
         {
-            int _S59 = int(_S53);
+            int _S113 = int(_S107);
 
-#line 454
-            float _S60 = NonDifferentiableWeights_operatorx5Bx5D_get_0(_S40, _S59);
-            int partition_2 = int(NonDifferentiableWeights_operatorx5Bx5D_get_0(_S41, _S59));
-            bool _S61 = partition_2 == 0;
+#line 488
+            float _S114 = NonDifferentiableWeights_operatorx5Bx5D_get_0(_S87, _S113);
+            uint partition_3 = clamp(uint(int(float(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S88, _S113)))), 0U, _S89);
+            bool _S115 = partition_3 == 0U;
 
-#line 456
-            if(_S61)
+#line 490
+            if(_S115)
             {
 
-#line 456
-                e0_2 = _S34;
+#line 490
+                e0_2 = _S90;
 
-#line 456
-                _S56 = false;
+#line 490
+                _S110 = false;
 
-#line 456
+#line 490
             }
             else
             {
 
-#line 456
-                bool _S62 = partition_2 == 1;
+#line 490
+                bool _S116 = partition_3 == 1U;
 
-#line 456
-                if(_S62)
+#line 490
+                if(_S116)
                 {
 
-#line 456
-                    e0_2 = _S36;
+#line 490
+                    e0_2 = _S92;
 
-#line 456
+#line 490
                 }
                 else
                 {
 
-#line 456
-                    e0_2 = _S38;
+#line 490
+                    e0_2 = _S93;
 
-#line 456
+#line 490
                 }
 
-#line 456
-                _S56 = _S62;
+#line 490
+                _S110 = _S116;
 
-#line 456
+#line 490
             }
-            if(_S61)
+            if(_S115)
             {
 
-#line 457
-                e1_2 = _S35;
+#line 491
+                e1_2 = _S91;
 
-#line 457
-                _S57 = false;
+#line 491
+                _S111 = false;
 
-#line 457
+#line 491
             }
             else
             {
 
-#line 457
-                bool _S63 = partition_2 == 1;
+#line 491
+                bool _S117 = partition_3 == 1U;
 
-#line 457
-                if(_S63)
+#line 491
+                if(_S117)
                 {
 
-#line 457
-                    e1_2 = _S37;
+#line 491
+                    e1_2 = _S94;
 
-#line 457
+#line 491
                 }
                 else
                 {
 
-#line 457
-                    e1_2 = _S39;
+#line 491
+                    e1_2 = _S95;
 
-#line 457
+#line 491
                 }
 
-#line 457
-                _S57 = _S63;
+#line 491
+                _S111 = _S117;
 
-#line 457
+#line 491
             }
 
-#line 456
-            bool _S64 = _S56;
+#line 490
+            bool _S118 = _S110;
 
-#line 456
-            _S55 = vec3(_S60);
+#line 490
+            _S109 = vec3(_S114);
 
-#line 456
-            _S56 = _S61;
+#line 490
+            _S110 = _S115;
 
-#line 456
-            _S58 = _S64;
+#line 490
+            _S112 = _S118;
 
-#line 456
+#line 490
         }
         else
         {
 
-#line 456
-            e0_2 = _S42;
+#line 490
+            e0_2 = _S96;
 
-#line 456
-            e1_2 = _S42;
+#line 490
+            e1_2 = _S96;
 
-#line 456
-            _S55 = _S42;
+#line 490
+            _S109 = _S96;
 
-#line 456
-            _S56 = false;
+#line 490
+            _S110 = false;
 
-#line 456
-            _S57 = false;
+#line 490
+            _S111 = false;
 
-#line 456
-            _S58 = false;
+#line 490
+            _S112 = false;
 
-#line 456
+#line 490
         }
 
-#line 451
-        TextureBlock_0 _S65 = TextureBlock_x24_syn_dadd_0(_S45, _S43);
+#line 485
+        TextureBlock_0 _S119 = TextureBlock_x24_syn_dadd_0(_S99, _S97);
 
-#line 451
-        if(_S54)
+#line 485
+        if(_S108)
         {
 
-#line 451
-            TextureBlock_0 _S66 = _S65;
+#line 485
+            TextureBlock_0 _S120 = _S119;
 
-#line 451
-            _S66.pixels_0[_S53] = _S42;
+#line 485
+            _S120.pixels_0[_S107] = _S96;
 
-#line 458
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S67;
+#line 492
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S121;
 
-#line 458
-            _S67.primal_0 = e0_2;
+#line 492
+            _S121.primal_0 = e0_2;
 
-#line 458
-            _S67.differential_0 = _S42;
+#line 492
+            _S121.differential_0 = _S96;
 
-#line 458
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S68;
+#line 492
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S122;
 
-#line 458
-            _S68.primal_0 = e1_2;
+#line 492
+            _S122.primal_0 = e1_2;
 
-#line 458
-            _S68.differential_0 = _S42;
+#line 492
+            _S122.differential_0 = _S96;
 
-#line 458
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S69;
+#line 492
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S123;
 
-#line 458
-            _S69.primal_0 = _S55;
+#line 492
+            _S123.primal_0 = _S109;
 
-#line 458
-            _S69.differential_0 = _S42;
+#line 492
+            _S123.differential_0 = _S96;
 
-#line 458
-            s_bwd_prop_lerp_0(_S67, _S68, _S69, _S65.pixels_0[_S53]);
+#line 492
+            s_bwd_prop_lerp_0(_S121, _S122, _S123, _S119.pixels_0[_S107]);
 
-#line 458
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S70 = _S68;
+#line 492
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S124 = _S122;
 
-#line 451
-            TextureBlock_0 _S71 = TextureBlock_x24_syn_dadd_0(_S66, _S43);
+#line 485
+            TextureBlock_0 _S125 = TextureBlock_x24_syn_dadd_0(_S120, _S97);
 
-#line 456
-            vec3 _S72 = _S67.differential_0 + _S52;
+#line 490
+            vec3 _S126 = _S121.differential_0 + _S106;
 
-#line 456
-            vec3 _S73;
+#line 490
+            vec3 _S127;
 
-#line 456
-            vec3 _S74;
+#line 490
+            vec3 _S128;
 
-#line 456
-            vec3 _S75;
+#line 490
+            vec3 _S129;
 
-#line 456
-            if(_S56)
+#line 490
+            if(_S110)
             {
 
-#line 2246 2
-                vec3 _S76 = _S70.differential_0 + _S50;
+#line 2246 3
+                vec3 _S130 = _S124.differential_0 + _S104;
 
 #line 2246
-                _S73 = _S46;
+                _S127 = _S100;
 
 #line 2246
-                _S74 = _S48;
+                _S128 = _S101;
 
 #line 2246
-                _S75 = _S76;
+                _S129 = _S130;
 
 #line 2246
             }
@@ -1630,17 +2667,17 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
             {
 
 #line 2246
-                if(_S57)
+                if(_S111)
                 {
 
 #line 2246
-                    vec3 _S77 = _S70.differential_0 + _S48;
+                    vec3 _S131 = _S124.differential_0 + _S101;
 
 #line 2246
-                    _S73 = _S46;
+                    _S127 = _S100;
 
 #line 2246
-                    _S74 = _S77;
+                    _S128 = _S131;
 
 #line 2246
                 }
@@ -1648,44 +2685,44 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
                 {
 
 #line 2246
-                    _S73 = _S70.differential_0 + _S46;
+                    _S127 = _S124.differential_0 + _S100;
 
 #line 2246
-                    _S74 = _S48;
+                    _S128 = _S101;
 
 #line 2246
                 }
 
 #line 2246
-                _S75 = _S50;
+                _S129 = _S104;
 
 #line 2246
             }
 
 #line 2246
-            vec3 _S78;
+            vec3 _S132;
 
 #line 2246
-            vec3 _S79;
+            vec3 _S133;
 
 #line 2246
-            vec3 _S80;
+            vec3 _S134;
 
 #line 2246
-            if(_S56)
+            if(_S110)
             {
 
 #line 2246
-                vec3 _S81 = _S72 + _S51;
+                vec3 _S135 = _S126 + _S105;
 
 #line 2246
-                _S78 = _S47;
+                _S132 = _S102;
 
 #line 2246
-                _S79 = _S49;
+                _S133 = _S103;
 
 #line 2246
-                _S80 = _S81;
+                _S134 = _S135;
 
 #line 2246
             }
@@ -1693,17 +2730,17 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
             {
 
 #line 2246
-                if(_S58)
+                if(_S112)
                 {
 
 #line 2246
-                    vec3 _S82 = _S72 + _S49;
+                    vec3 _S136 = _S126 + _S103;
 
 #line 2246
-                    _S78 = _S47;
+                    _S132 = _S102;
 
 #line 2246
-                    _S79 = _S82;
+                    _S133 = _S136;
 
 #line 2246
                 }
@@ -1711,43 +2748,43 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
                 {
 
 #line 2246
-                    _S78 = _S72 + _S47;
+                    _S132 = _S126 + _S102;
 
 #line 2246
-                    _S79 = _S49;
+                    _S133 = _S103;
 
 #line 2246
                 }
 
 #line 2246
-                _S80 = _S51;
+                _S134 = _S105;
 
 #line 2246
             }
 
 #line 2246
-            _S45 = _S71;
+            _S99 = _S125;
 
 #line 2246
-            _S46 = _S73;
+            _S100 = _S127;
 
 #line 2246
-            _S47 = _S78;
+            _S101 = _S128;
 
 #line 2246
-            _S48 = _S74;
+            _S102 = _S132;
 
 #line 2246
-            _S49 = _S79;
+            _S103 = _S133;
 
 #line 2246
-            _S50 = _S75;
+            _S104 = _S129;
 
 #line 2246
-            _S51 = _S80;
+            _S105 = _S134;
 
 #line 2246
-            _S52 = _S42;
+            _S106 = _S96;
 
 #line 2246
         }
@@ -1755,7 +2792,7 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
         {
 
 #line 2246
-            _S45 = TextureBlock_x24_syn_dadd_0(_S65, _S43);
+            _S99 = TextureBlock_x24_syn_dadd_0(_S119, _S97);
 
 #line 2246
         }
@@ -1763,393 +2800,393 @@ void s_bwd_prop_decompress3P_0(inout DiffPair_CompressedTextureBlock3P_0 dpblock
 #line 2246
         _dc_0 = _dc_0 - 1;
 
-#line 452 0
+#line 486 0
     }
 
-#line 452
-    CompressedTextureBlock3P_Differential_0 _S83 = CompressedTextureBlock3P_x24_syn_dzero_0();
+#line 486
+    CompressedTextureBlock3P_Differential_0 _S137 = CompressedTextureBlock3P_x24_syn_dzero_0();
 
-#line 452
-    _S83.ep5_1 = _S46;
+#line 486
+    _S137.ep5_1 = _S100;
 
-#line 452
-    _S83.ep4_1 = _S47;
+#line 486
+    _S137.ep3_1 = _S101;
 
-#line 452
-    _S83.ep3_1 = _S48;
+#line 486
+    _S137.ep4_1 = _S102;
 
-#line 452
-    _S83.ep2_1 = _S49;
+#line 486
+    _S137.ep2_1 = _S103;
 
-#line 452
-    _S83.ep1_2 = _S50;
+#line 486
+    _S137.ep1_2 = _S104;
 
-#line 452
-    _S83.ep0_2 = _S51;
+#line 486
+    _S137.ep0_2 = _S105;
 
-#line 452
-    dpblockCoefficients_1.primal_0 = dpblockCoefficients_1.primal_0;
+#line 486
+    dpthis_1.primal_0 = dpthis_1.primal_0;
 
-#line 452
-    dpblockCoefficients_1.differential_0 = _S83;
+#line 486
+    dpthis_1.differential_0 = _S137;
 
-#line 442
+#line 483
     return;
 }
 
 
-#line 442
-void s_bwd_prop_dot_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S84, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S85, float _S86)
+#line 483
+void s_bwd_prop_dot_0(inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S138, inout DiffPair_vectorx3Cfloatx2C3x3E_0 _S139, float _S140)
 {
 
-#line 442
-    _d_dot_0(_S84, _S85, _S86);
+#line 483
+    _d_dot_0(_S138, _S139, _S140);
 
-#line 442
+#line 483
     return;
 }
 
 
-#line 442
-void s_bwd_prop_loss_3P_0(uint _S87, inout DiffPair_CompressedTextureBlock3P_0 _S88, float _S89)
+#line 483
+void s_bwd_prop_loss_3P_0(uint _S141, inout DiffPair_CompressedTextureBlock3P_0 _S142, float _S143)
 {
 
-#line 442
-    CompressedTextureBlock3P_0 _S90 = _S88.primal_0;
+#line 483
+    CompressedTextureBlock3P_0 _S144 = _S142.primal_0;
 
-#line 442
-    TextureBlock_0 _S91 = s_primal_ctx_decompress3P_0(_S88.primal_0);
+#line 483
+    TextureBlock_0 _S145 = s_primal_ctx_CompressedTextureBlock3P_decompress3P_0(_S142.primal_0);
 
-#line 2239 2
-    vec3 _S92 = vec3(0.0);
+#line 2239 3
+    vec3 _S146 = vec3(0.0);
 
 #line 2239
     int _dc_1 = 16;
 
 #line 2239
-    float _S93 = _S89;
+    float _S147 = _S143;
 
 #line 2239
-    vec3  _S94[16];
+    vec3  _S148[16];
 
 #line 2239
-    _S94[0] = _S92;
+    _S148[0] = _S146;
 
 #line 2239
-    _S94[1] = _S92;
+    _S148[1] = _S146;
 
 #line 2239
-    _S94[2] = _S92;
+    _S148[2] = _S146;
 
 #line 2239
-    _S94[3] = _S92;
+    _S148[3] = _S146;
 
 #line 2239
-    _S94[4] = _S92;
+    _S148[4] = _S146;
 
 #line 2239
-    _S94[5] = _S92;
+    _S148[5] = _S146;
 
 #line 2239
-    _S94[6] = _S92;
+    _S148[6] = _S146;
 
 #line 2239
-    _S94[7] = _S92;
+    _S148[7] = _S146;
 
 #line 2239
-    _S94[8] = _S92;
+    _S148[8] = _S146;
 
 #line 2239
-    _S94[9] = _S92;
+    _S148[9] = _S146;
 
 #line 2239
-    _S94[10] = _S92;
+    _S148[10] = _S146;
 
 #line 2239
-    _S94[11] = _S92;
+    _S148[11] = _S146;
 
 #line 2239
-    _S94[12] = _S92;
+    _S148[12] = _S146;
 
 #line 2239
-    _S94[13] = _S92;
+    _S148[13] = _S146;
 
 #line 2239
-    _S94[14] = _S92;
+    _S148[14] = _S146;
 
 #line 2239
-    _S94[15] = _S92;
+    _S148[15] = _S146;
 
-#line 471 0
+#line 665 0
     for(;;)
     {
 
-#line 471
+#line 665
         if(_dc_1 >= 0)
         {
         }
         else
         {
 
-#line 471
+#line 665
             break;
         }
 
-#line 471
-        bool _S95 = _dc_1 < 16;
+#line 665
+        bool _S149 = _dc_1 < 16;
 
-#line 471
-        int _S96;
+#line 665
+        int _S150;
 
-#line 471
-        vec3 _S97;
+#line 665
+        vec3 _S151;
 
-#line 471
-        if(_S95)
+#line 665
+        if(_S149)
         {
-            vec3 diff_0 = _S91.pixels_0[_dc_1] - g_groundtruth_0._data[uint(_S87)].pixels_0[_dc_1];
+            vec3 diff_0 = _S145.pixels_0[_dc_1] - g_groundtruth_0._data[uint(_S141)].pixels_0[_dc_1];
 
-#line 473
-            _S96 = 1;
+#line 667
+            _S150 = 1;
 
-#line 473
-            _S97 = diff_0;
+#line 667
+            _S151 = diff_0;
 
-#line 473
+#line 667
         }
         else
         {
 
-#line 473
-            _S96 = 0;
+#line 667
+            _S150 = 0;
 
-#line 473
-            _S97 = _S92;
+#line 667
+            _S151 = _S146;
 
-#line 473
+#line 667
         }
 
-#line 473
-        float _S98;
+#line 667
+        float _S152;
 
-#line 473
-        float _S99;
+#line 667
+        float _S153;
 
-#line 473
-        if(!(_S96 != 1))
+#line 667
+        if(!(_S150 != 1))
         {
 
-#line 473
-            _S98 = _S93;
+#line 667
+            _S152 = _S147;
 
-#line 473
-            _S99 = 0.0;
+#line 667
+            _S153 = 0.0;
 
-#line 473
-        }
-        else
-        {
-
-#line 473
-            _S98 = 0.0;
-
-#line 473
-            _S99 = _S93;
-
-#line 473
-        }
-
-#line 473
-        if(_S95)
-        {
-
-#line 474
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S100;
-
-#line 474
-            _S100.primal_0 = _S97;
-
-#line 474
-            _S100.differential_0 = _S92;
-
-#line 474
-            DiffPair_vectorx3Cfloatx2C3x3E_0 _S101;
-
-#line 474
-            _S101.primal_0 = _S97;
-
-#line 474
-            _S101.differential_0 = _S92;
-
-#line 474
-            s_bwd_prop_dot_0(_S100, _S101, _S98);
-
-#line 473
-            vec3 _S102 = _S101.differential_0 + _S100.differential_0;
-
-#line 469
-            float _S103 = _S98 + _S99;
-
-#line 469
-            vec3  _S104[16];
-
-#line 469
-            _S104[0] = _S92;
-
-#line 469
-            _S104[1] = _S92;
-
-#line 469
-            _S104[2] = _S92;
-
-#line 469
-            _S104[3] = _S92;
-
-#line 469
-            _S104[4] = _S92;
-
-#line 469
-            _S104[5] = _S92;
-
-#line 469
-            _S104[6] = _S92;
-
-#line 469
-            _S104[7] = _S92;
-
-#line 469
-            _S104[8] = _S92;
-
-#line 469
-            _S104[9] = _S92;
-
-#line 469
-            _S104[10] = _S92;
-
-#line 469
-            _S104[11] = _S92;
-
-#line 469
-            _S104[12] = _S92;
-
-#line 469
-            _S104[13] = _S92;
-
-#line 469
-            _S104[14] = _S92;
-
-#line 469
-            _S104[15] = _S92;
-
-#line 469
-            _S104[_dc_1] = _S102;
-
-#line 2246 2
-            vec3 _S105 = _S94[0] + _S104[0];
-
-#line 2246
-            vec3 _S106 = _S94[1] + _S104[1];
-
-#line 2246
-            vec3 _S107 = _S94[2] + _S104[2];
-
-#line 2246
-            vec3 _S108 = _S94[3] + _S104[3];
-
-#line 2246
-            vec3 _S109 = _S94[4] + _S104[4];
-
-#line 2246
-            vec3 _S110 = _S94[5] + _S104[5];
-
-#line 2246
-            vec3 _S111 = _S94[6] + _S104[6];
-
-#line 2246
-            vec3 _S112 = _S94[7] + _S104[7];
-
-#line 2246
-            vec3 _S113 = _S94[8] + _S104[8];
-
-#line 2246
-            vec3 _S114 = _S94[9] + _S104[9];
-
-#line 2246
-            vec3 _S115 = _S94[10] + _S104[10];
-
-#line 2246
-            vec3 _S116 = _S94[11] + _S104[11];
-
-#line 2246
-            vec3 _S117 = _S94[12] + _S104[12];
-
-#line 2246
-            vec3 _S118 = _S94[13] + _S104[13];
-
-#line 2246
-            vec3 _S119 = _S94[14] + _S104[14];
-
-#line 2246
-            vec3 _S120 = _S94[15] + _S104[15];
-
-#line 2246
-            _S93 = _S103;
-
-#line 2246
-            _S94[0] = _S105;
-
-#line 2246
-            _S94[1] = _S106;
-
-#line 2246
-            _S94[2] = _S107;
-
-#line 2246
-            _S94[3] = _S108;
-
-#line 2246
-            _S94[4] = _S109;
-
-#line 2246
-            _S94[5] = _S110;
-
-#line 2246
-            _S94[6] = _S111;
-
-#line 2246
-            _S94[7] = _S112;
-
-#line 2246
-            _S94[8] = _S113;
-
-#line 2246
-            _S94[9] = _S114;
-
-#line 2246
-            _S94[10] = _S115;
-
-#line 2246
-            _S94[11] = _S116;
-
-#line 2246
-            _S94[12] = _S117;
-
-#line 2246
-            _S94[13] = _S118;
-
-#line 2246
-            _S94[14] = _S119;
-
-#line 2246
-            _S94[15] = _S120;
-
-#line 2246
+#line 667
         }
         else
         {
 
+#line 667
+            _S152 = 0.0;
+
+#line 667
+            _S153 = _S147;
+
+#line 667
+        }
+
+#line 667
+        if(_S149)
+        {
+
+#line 668
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S154;
+
+#line 668
+            _S154.primal_0 = _S151;
+
+#line 668
+            _S154.differential_0 = _S146;
+
+#line 668
+            DiffPair_vectorx3Cfloatx2C3x3E_0 _S155;
+
+#line 668
+            _S155.primal_0 = _S151;
+
+#line 668
+            _S155.differential_0 = _S146;
+
+#line 668
+            s_bwd_prop_dot_0(_S154, _S155, _S152);
+
+#line 667
+            vec3 _S156 = _S155.differential_0 + _S154.differential_0;
+
+#line 663
+            float _S157 = _S152 + _S153;
+
+#line 663
+            vec3  _S158[16];
+
+#line 663
+            _S158[0] = _S146;
+
+#line 663
+            _S158[1] = _S146;
+
+#line 663
+            _S158[2] = _S146;
+
+#line 663
+            _S158[3] = _S146;
+
+#line 663
+            _S158[4] = _S146;
+
+#line 663
+            _S158[5] = _S146;
+
+#line 663
+            _S158[6] = _S146;
+
+#line 663
+            _S158[7] = _S146;
+
+#line 663
+            _S158[8] = _S146;
+
+#line 663
+            _S158[9] = _S146;
+
+#line 663
+            _S158[10] = _S146;
+
+#line 663
+            _S158[11] = _S146;
+
+#line 663
+            _S158[12] = _S146;
+
+#line 663
+            _S158[13] = _S146;
+
+#line 663
+            _S158[14] = _S146;
+
+#line 663
+            _S158[15] = _S146;
+
+#line 663
+            _S158[_dc_1] = _S156;
+
+#line 2246 3
+            vec3 _S159 = _S148[0] + _S158[0];
+
 #line 2246
-            _S93 = _S99;
+            vec3 _S160 = _S148[1] + _S158[1];
+
+#line 2246
+            vec3 _S161 = _S148[2] + _S158[2];
+
+#line 2246
+            vec3 _S162 = _S148[3] + _S158[3];
+
+#line 2246
+            vec3 _S163 = _S148[4] + _S158[4];
+
+#line 2246
+            vec3 _S164 = _S148[5] + _S158[5];
+
+#line 2246
+            vec3 _S165 = _S148[6] + _S158[6];
+
+#line 2246
+            vec3 _S166 = _S148[7] + _S158[7];
+
+#line 2246
+            vec3 _S167 = _S148[8] + _S158[8];
+
+#line 2246
+            vec3 _S168 = _S148[9] + _S158[9];
+
+#line 2246
+            vec3 _S169 = _S148[10] + _S158[10];
+
+#line 2246
+            vec3 _S170 = _S148[11] + _S158[11];
+
+#line 2246
+            vec3 _S171 = _S148[12] + _S158[12];
+
+#line 2246
+            vec3 _S172 = _S148[13] + _S158[13];
+
+#line 2246
+            vec3 _S173 = _S148[14] + _S158[14];
+
+#line 2246
+            vec3 _S174 = _S148[15] + _S158[15];
+
+#line 2246
+            _S147 = _S157;
+
+#line 2246
+            _S148[0] = _S159;
+
+#line 2246
+            _S148[1] = _S160;
+
+#line 2246
+            _S148[2] = _S161;
+
+#line 2246
+            _S148[3] = _S162;
+
+#line 2246
+            _S148[4] = _S163;
+
+#line 2246
+            _S148[5] = _S164;
+
+#line 2246
+            _S148[6] = _S165;
+
+#line 2246
+            _S148[7] = _S166;
+
+#line 2246
+            _S148[8] = _S167;
+
+#line 2246
+            _S148[9] = _S168;
+
+#line 2246
+            _S148[10] = _S169;
+
+#line 2246
+            _S148[11] = _S170;
+
+#line 2246
+            _S148[12] = _S171;
+
+#line 2246
+            _S148[13] = _S172;
+
+#line 2246
+            _S148[14] = _S173;
+
+#line 2246
+            _S148[15] = _S174;
+
+#line 2246
+        }
+        else
+        {
+
+#line 2246
+            _S147 = _S153;
 
 #line 2246
         }
@@ -2157,949 +3194,819 @@ void s_bwd_prop_loss_3P_0(uint _S87, inout DiffPair_CompressedTextureBlock3P_0 _
 #line 2246
         _dc_1 = _dc_1 - 1;
 
-#line 471 0
+#line 665 0
     }
 
-#line 468
-    TextureBlock_0 _S121 = TextureBlock_x24_syn_dzero_0();
+#line 662
+    TextureBlock_0 _S175 = TextureBlock_x24_syn_dzero_0();
 
-#line 468
-    _S121.pixels_0 = _S94;
+#line 662
+    _S175.pixels_0 = _S148;
 
-#line 468
-    CompressedTextureBlock3P_Differential_0 _S122 = CompressedTextureBlock3P_x24_syn_dzero_0();
+#line 662
+    CompressedTextureBlock3P_Differential_0 _S176 = CompressedTextureBlock3P_x24_syn_dzero_0();
 
-#line 468
-    DiffPair_CompressedTextureBlock3P_0 _S123;
+#line 662
+    DiffPair_CompressedTextureBlock3P_0 _S177;
 
-#line 468
-    _S123.primal_0 = _S90;
+#line 662
+    _S177.primal_0 = _S144;
 
-#line 468
-    _S123.differential_0 = _S122;
+#line 662
+    _S177.differential_0 = _S176;
 
-#line 468
-    s_bwd_prop_decompress3P_0(_S123, _S121);
+#line 662
+    s_bwd_prop_CompressedTextureBlock3P_decompress3P_0(_S177, _S175);
 
-#line 468
-    _S88.primal_0 = _S88.primal_0;
+#line 662
+    _S142.primal_0 = _S142.primal_0;
 
-#line 468
-    _S88.differential_0 = _S123.differential_0;
+#line 662
+    _S142.differential_0 = _S177.differential_0;
 
-#line 464
+#line 658
     return;
 }
 
 
-#line 464
-void s_bwd_loss_3P_0(uint _S124, inout DiffPair_CompressedTextureBlock3P_0 _S125, float _S126)
+#line 658
+void s_bwd_loss_3P_0(uint _S178, inout DiffPair_CompressedTextureBlock3P_0 _S179, float _S180)
 {
 
-#line 464
-    s_bwd_prop_loss_3P_0(_S124, _S125, _S126);
+#line 658
+    s_bwd_prop_loss_3P_0(_S178, _S179, _S180);
 
-#line 464
+#line 658
     return;
 }
 
 
-#line 464
-void one_step_opt_0(inout CompressedTextureBlock3P_0 _S127, uint _S128, bool _S129, bool _S130)
+#line 658
+void CompressedTextureBlock3P_solve_weights_0(inout CompressedTextureBlock3P_0 _S181, uint _S182)
 {
 
-#line 379
-    vec3 L1_0 = _S127.ep1_0 - _S127.ep0_0;
-    vec3 L2_0 = _S127.ep3_0 - _S127.ep2_0;
-    vec3 L3_0 = _S127.ep5_0 - _S127.ep4_0;
-    float _S131 = 1.0 / (dot(L1_0, L1_0) + 9.99999997475242708e-07);
-    float _S132 = 1.0 / (dot(L2_0, L2_0) + 9.99999997475242708e-07);
-    float _S133 = 1.0 / (dot(L3_0, L3_0) + 9.99999997475242708e-07);
+#line 413
+    vec3 L1_0 = _S181.ep1_0 - _S181.ep0_0;
+    vec3 L2_0 = _S181.ep3_0 - _S181.ep2_0;
+    vec3 L3_0 = _S181.ep5_0 - _S181.ep4_0;
+    float _S183 = 1.0 / (dot(L1_0, L1_0) + 9.99999997475242708e-07);
+    float _S184 = 1.0 / (dot(L2_0, L2_0) + 9.99999997475242708e-07);
+    float _S185 = 1.0 / (dot(L3_0, L3_0) + 9.99999997475242708e-07);
 
-#line 384
-    int i_4 = 0;
-
+#line 418
+    int i_10 = 0;
     for(;;)
     {
 
-#line 386
-        if(i_4 < 16)
+#line 419
+        if(i_10 < 16)
         {
         }
         else
         {
 
-#line 386
+#line 419
             break;
         }
 
-        vec3 P1_0 = g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep0_0;
-        vec3 P2_0 = g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep2_0;
-        vec3 P3_0 = g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep4_0;
+#line 419
+        vec3 C_0 = g_groundtruth_0._data[uint(_S182)].pixels_0[i_10];
 
-#line 399
-        _S127.partition_logits_0.data_0[i_4] = float(get_partition_0(distSq_0(P1_0, L1_0, dot(P1_0, L1_0), _S131), distSq_0(P2_0, L2_0, dot(P2_0, L2_0), _S132), distSq_0(P3_0, L3_0, dot(P3_0, L3_0), _S133)));
 
-#line 386
-        i_4 = i_4 + 1;
+        int p_0 = NonDifferentiableIntWeights_operatorx5Bx5D_get_0(_S181.partition_index_0, i_10);
+        bool _S186 = p_0 == 0;
 
-#line 386
+#line 423
+        float pDotL_1;
+
+#line 423
+        if(_S186)
+        {
+
+#line 423
+            pDotL_1 = dot(C_0 - _S181.ep0_0, L1_0);
+
+#line 423
+        }
+        else
+        {
+
+#line 423
+            if(p_0 == 1)
+            {
+
+#line 423
+                pDotL_1 = dot(C_0 - _S181.ep2_0, L2_0);
+
+#line 423
+            }
+            else
+            {
+
+#line 423
+                pDotL_1 = dot(C_0 - _S181.ep4_0, L3_0);
+
+#line 423
+            }
+
+#line 423
+        }
+
+#line 423
+        float invLenSq_1;
+        if(_S186)
+        {
+
+#line 424
+            invLenSq_1 = _S183;
+
+#line 424
+        }
+        else
+        {
+
+#line 424
+            if(p_0 == 1)
+            {
+
+#line 424
+                invLenSq_1 = _S184;
+
+#line 424
+            }
+            else
+            {
+
+#line 424
+                invLenSq_1 = _S185;
+
+#line 424
+            }
+
+#line 424
+        }
+
+        _S181.weights_0.data_0[i_10] = saturate_1(pDotL_1 * invLenSq_1);
+
+#line 419
+        i_10 = i_10 + 1;
+
+#line 419
     }
 
-#line 386
-    vec3 L1_1;
+#line 428
+    return;
+}
 
-#line 386
-    vec3 L2_1;
 
-#line 386
-    vec3 L3_1;
+#line 428
+uint CompressedTextureBlock3P_solve_partition_0(inout CompressedTextureBlock3P_0 _S187, uint _S188)
+{
 
-#line 386
-    float invLenSq1_0;
 
-#line 386
-    float invLenSq2_0;
+    vec3 L1_1 = _S187.ep1_0 - _S187.ep0_0;
+    vec3 L2_1 = _S187.ep3_0 - _S187.ep2_0;
+    vec3 L3_1 = _S187.ep5_0 - _S187.ep4_0;
+    float _S189 = 1.0 / (dot(L1_1, L1_1) + 9.99999997475242708e-07);
+    float _S190 = 1.0 / (dot(L2_1, L2_1) + 9.99999997475242708e-07);
+    float _S191 = 1.0 / (dot(L3_1, L3_1) + 9.99999997475242708e-07);
 
-#line 386
-    float invLenSq3_0;
+#line 437
+    int i_11 = 0;
 
-#line 401
-    if(_S129)
+#line 437
+    uint partitions_0 = 0U;
+
+    for(;;)
     {
 
-#line 402
-        snap_1(_S127, _S130);
-        vec3 L1_2 = _S127.ep1_0 - _S127.ep0_0;
-        vec3 L2_2 = _S127.ep3_0 - _S127.ep2_0;
-        vec3 L3_2 = _S127.ep5_0 - _S127.ep4_0;
-        float _S134 = 1.0 / (dot(L1_2, L1_2) + 9.99999997475242708e-07);
-        float _S135 = 1.0 / (dot(L2_2, L2_2) + 9.99999997475242708e-07);
-        float _S136 = 1.0 / (dot(L3_2, L3_2) + 9.99999997475242708e-07);
+#line 439
+        if(i_11 < 16)
+        {
+        }
+        else
+        {
 
-#line 408
-        L1_1 = L1_2;
+#line 439
+            break;
+        }
 
-#line 408
-        L2_1 = L2_2;
+        vec3 P1_0 = g_groundtruth_0._data[uint(_S188)].pixels_0[i_11] - _S187.ep0_0;
+        vec3 P2_0 = g_groundtruth_0._data[uint(_S188)].pixels_0[i_11] - _S187.ep2_0;
+        vec3 P3_0 = g_groundtruth_0._data[uint(_S188)].pixels_0[i_11] - _S187.ep4_0;
+        float pDotL1_0 = dot(P1_0, L1_1);
+        float pDotL2_0 = dot(P2_0, L2_1);
+        float pDotL3_0 = dot(P3_0, L3_1);
+        float d1_1 = CompressedTextureBlock3P_distSq_0(P1_0, L1_1, pDotL1_0, _S189);
+        float d2_1 = CompressedTextureBlock3P_distSq_0(P2_0, L2_1, pDotL2_0, _S190);
 
-#line 408
-        L3_1 = L3_2;
+#line 449
+        float d3_1;
+        if((_S187.max_partitions_1) == 3U)
+        {
 
-#line 408
-        invLenSq1_0 = _S134;
+#line 450
+            d3_1 = CompressedTextureBlock3P_distSq_0(P3_0, L3_1, pDotL3_0, _S191);
 
-#line 408
-        invLenSq2_0 = _S135;
+#line 450
+        }
+        else
+        {
 
-#line 408
-        invLenSq3_0 = _S136;
+#line 450
+            d3_1 = 1000.0;
 
-#line 401
+#line 450
+        }
+        uint p_1 = CompressedTextureBlock3P_argmin_0(d1_1, d2_1, d3_1);
+        _S187.partition_index_0.data_1[i_11] = int(p_1);
+        uint partitions_1 = partitions_0 | uint(1 << p_1);
+
+
+        bool _S192 = p_1 == 0U;
+
+#line 456
+        float pDotL_2;
+
+#line 456
+        if(_S192)
+        {
+
+#line 456
+            pDotL_2 = pDotL1_0;
+
+#line 456
+        }
+        else
+        {
+
+#line 456
+            if(p_1 == 1U)
+            {
+
+#line 456
+                pDotL_2 = pDotL2_0;
+
+#line 456
+            }
+            else
+            {
+
+#line 456
+                pDotL_2 = pDotL3_0;
+
+#line 456
+            }
+
+#line 456
+        }
+
+#line 456
+        float invLenSq_2;
+        if(_S192)
+        {
+
+#line 457
+            invLenSq_2 = _S189;
+
+#line 457
+        }
+        else
+        {
+
+#line 457
+            if(p_1 == 1U)
+            {
+
+#line 457
+                invLenSq_2 = _S190;
+
+#line 457
+            }
+            else
+            {
+
+#line 457
+                invLenSq_2 = _S191;
+
+#line 457
+            }
+
+#line 457
+        }
+
+        _S187.weights_0.data_0[i_11] = saturate_1(pDotL_2 * invLenSq_2);
+
+#line 439
+        i_11 = i_11 + 1;
+
+#line 439
+        partitions_0 = partitions_1;
+
+#line 439
+    }
+
+#line 461
+    return partitions_0;
+}
+
+
+#line 461
+void CompressedTextureBlock3P_one_step_solve_partition_0(inout CompressedTextureBlock3P_0 _S193, uint _S194, bool _S195)
+{
+
+
+
+    if((_S193.max_partitions_1) == 1U)
+    {
+
+#line 466
+        CompressedTextureBlock3P_solve_weights_0(_S193, _S194);
+
+        return;
+    }
+
+#line 468
+    uint _S196 = CompressedTextureBlock3P_solve_partition_0(_S193, _S194);
+
+#line 468
+    bool single_partition_0;
+
+#line 474
+    if((_S193.max_partitions_1) > 1U)
+    {
+
+#line 474
+        if(_S196 == 1U)
+        {
+
+#line 474
+            single_partition_0 = true;
+
+#line 474
+        }
+        else
+        {
+
+#line 474
+            single_partition_0 = _S196 == 2U;
+
+#line 474
+        }
+
+#line 474
+        if(single_partition_0)
+        {
+
+#line 474
+            single_partition_0 = true;
+
+#line 474
+        }
+        else
+        {
+
+#line 474
+            single_partition_0 = _S196 == 4U;
+
+#line 474
+        }
+
+#line 474
     }
     else
     {
 
-#line 401
-        L1_1 = L1_0;
+#line 474
+        single_partition_0 = false;
 
-#line 401
-        L2_1 = L2_0;
-
-#line 401
-        L3_1 = L3_0;
-
-#line 401
-        invLenSq1_0 = _S131;
-
-#line 401
-        invLenSq2_0 = _S132;
-
-#line 401
-        invLenSq3_0 = _S133;
-
-#line 401
+#line 474
     }
-
-#line 401
-    i_4 = 0;
-
-#line 410
-    for(;;)
+    if(_S195)
     {
 
-#line 410
-        if(i_4 < 16)
-        {
-        }
-        else
-        {
+#line 475
+        single_partition_0 = true;
 
-#line 410
-            break;
-        }
-
-#line 416
-        float pDotL1_0 = dot(g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep0_0, L1_1);
-        float pDotL2_0 = dot(g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep2_0, L2_1);
-        float pDotL3_0 = dot(g_groundtruth_0._data[uint(_S128)].pixels_0[i_4] - _S127.ep4_0, L3_1);
-
-        float partition_3 = NonDifferentiableWeights_operatorx5Bx5D_get_0(_S127.partition_logits_0, i_4);
-        bool _S137 = partition_3 == 0.0;
-
-#line 421
-        float pDotL_1;
-
-#line 421
-        if(_S137)
-        {
-
-#line 421
-            pDotL_1 = pDotL1_0;
-
-#line 421
-        }
-        else
-        {
-
-#line 421
-            if(partition_3 == 1.0)
-            {
-
-#line 421
-                pDotL_1 = pDotL2_0;
-
-#line 421
-            }
-            else
-            {
-
-#line 421
-                pDotL_1 = pDotL3_0;
-
-#line 421
-            }
-
-#line 421
-        }
-
-#line 421
-        float invLenSq_1;
-        if(_S137)
-        {
-
-#line 422
-            invLenSq_1 = invLenSq1_0;
-
-#line 422
-        }
-        else
-        {
-
-#line 422
-            if(partition_3 == 1.0)
-            {
-
-#line 422
-                invLenSq_1 = invLenSq2_0;
-
-#line 422
-            }
-            else
-            {
-
-#line 422
-                invLenSq_1 = invLenSq3_0;
-
-#line 422
-            }
-
-#line 422
-        }
-
-
-        _S127.weights_0.data_0[i_4] = saturate_1(pDotL_1 * invLenSq_1);
-
-#line 410
-        i_4 = i_4 + 1;
-
-#line 410
+#line 475
     }
 
-#line 427
+#line 475
+    if(single_partition_0)
+    {
+
+#line 476
+        CompressedTextureBlock3P_snap_0(_S193);
+
+#line 476
+        CompressedTextureBlock3P_solve_weights_0(_S193, _S194);
+
+#line 475
+    }
+
+#line 480
     return;
 }
 
 
-#line 427
-float loss_3P_0(uint _S138, CompressedTextureBlock3P_0 _S139)
+#line 480
+float loss_3P_0(uint _S197, CompressedTextureBlock3P_0 _S198)
 {
 
-#line 468
-    TextureBlock_0 _S140 = decompress3P_0(_S139);
+#line 662
+    TextureBlock_0 _S199 = CompressedTextureBlock3P_decompress3P_0(_S198);
 
-#line 468
-    int i_5 = 0;
+#line 662
+    int i_12 = 0;
 
-#line 468
+#line 662
     float totalError_0 = 0.0;
 
 
     for(;;)
     {
 
-#line 471
-        if(i_5 < 16)
+#line 665
+        if(i_12 < 16)
         {
         }
         else
         {
 
-#line 471
+#line 665
             break;
         }
-        vec3 diff_1 = _S140.pixels_0[i_5] - g_groundtruth_0._data[uint(_S138)].pixels_0[i_5];
+        vec3 diff_1 = _S199.pixels_0[i_12] - g_groundtruth_0._data[uint(_S197)].pixels_0[i_12];
         float totalError_1 = totalError_0 + dot(diff_1, diff_1);
 
-#line 471
-        i_5 = i_5 + 1;
+#line 665
+        i_12 = i_12 + 1;
 
-#line 471
+#line 665
         totalError_0 = totalError_1;
 
-#line 471
+#line 665
     }
 
-#line 477
+#line 671
     return totalError_0;
 }
 
 
-#line 514
+#line 684
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 void main()
 {
 
-#line 516
-    uint blockIdx_1 = gl_GlobalInvocationID.x;
-    if(blockIdx_1 >= (g_compress_step_params_0._data[uint(0)].num_blocks_0))
+#line 686
+    uint blockIdx_0 = gl_GlobalInvocationID.x;
+    if(blockIdx_0 >= (g_params_0.num_blocks_0))
     {
 
-#line 517
+#line 687
         return;
     }
 
-#line 518
-    uvec2 _S141 = (clockRealtime2x32EXT());
+#line 688
+    uvec2 _S200 = (clockRealtime2x32EXT());
 
-#line 518
-    g_diagnostics_0._data[uint(blockIdx_1)].start_clock_0 = _S141;
+#line 688
+    g_diagnostics_0._data[uint(blockIdx_0)].start_clock_0 = _S200;
 
-    CompressedTextureBlock3P_0 value_0 = g_compressedBlock3P_0._data[uint(blockIdx_1)];
+    uint perm_5 = 0U;
+    CompressedTextureBlock3P_0 block_0 = g_compressedBlock3P_0._data[uint(blockIdx_0)];
 
-    float _S142 = g_compress_step_params_0._data[uint(0)].learning_rate_0;
-    uint steps_1 = g_compress_step_params_0._data[uint(0)].steps_0;
-    bool _S143 = (g_compress_step_params_0._data[uint(0)].snap_0) > 0U;
-    float _S144 = float(g_compress_step_params_0._data[uint(0)].steps_0);
+    float _S201 = g_params_0.learning_rate_0;
+    uint steps_1 = g_params_0.steps_0;
+    bool _S202 = int(g_params_0.snap_0) > 0;
 
-#line 525
-    uint _S145 = uint(_S144 * 0.80000001192092896);
-    uint _S146 = uint(_S144 * 0.94999998807907104);
-    uint _S147 = max(1U, g_compress_step_params_0._data[uint(0)].steps_0 / 20U);
+#line 695
+    uint _S203;
+    if((g_params_0.snap_steps_0) == 0U)
+    {
 
-#line 532
+#line 696
+        _S203 = uint(float(steps_1) * 0.5);
+
+#line 696
+    }
+    else
+    {
+
+#line 696
+        _S203 = steps_1 - g_params_0.snap_steps_0;
+
+#line 696
+    }
+
+    uint _S204 = g_params_0.exact_steps_0;
+
     PCG32_0 prng_0 = PCG32_x24init_0(0U);
-    uint _S148 = PCG32_nextUint_0(prng_0);
+    block_0.max_partitions_1 = g_params_0.max_partitions_0;
 
-#line 533
-    value_0.ep0_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S148 % 16U];
-    uint _S149 = PCG32_nextUint_0(prng_0);
+#line 701
+    CompressedTextureBlock3P_random_initialize_0(block_0, blockIdx_0, prng_0);
 
-#line 534
-    value_0.ep1_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S149 % 16U];
+#line 701
+    int i_13 = 0;
 
-#line 534
-    int i_6 = 0;
     for(;;)
     {
 
-#line 535
-        if(i_6 < 8)
+#line 703
+        if(i_13 < 16)
         {
         }
         else
         {
 
-#line 535
+#line 703
             break;
         }
 
-#line 536
-        uint _S150 = PCG32_nextUint_0(prng_0);
-
-#line 536
-        value_0.ep1_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S150 % 16U];
-        vec3 d_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S150 % 16U] - value_0.ep0_0;
-        if((dot(d_0, d_0)) > 0.30000001192092896)
+#line 704
+        if(uint(NonDifferentiableIntWeights_operatorx5Bx5D_get_0(block_0.partition_index_0, i_13)) >= (block_0.max_partitions_1))
         {
 
-#line 539
-            break;
+#line 705
+            uint _S205 = PCG32_nextUint_0(prng_0);
+
+#line 705
+            uint _S206 = _S205 % block_0.max_partitions_1;
+
+#line 705
+            block_0.partition_index_0.data_1[i_13] = int(_S206);
+
+#line 704
         }
 
-#line 535
-        i_6 = i_6 + 1;
+#line 703
+        i_13 = i_13 + 1;
 
-#line 535
+#line 703
     }
 
-#line 535
-    i_6 = 0;
+#line 709
+    uint _S207 = max(1U, steps_1 / 20U);
 
-#line 542
-    for(;;)
-    {
-
-#line 542
-        if(i_6 < 8)
-        {
-        }
-        else
-        {
-
-#line 542
-            break;
-        }
-
-#line 543
-        uint _S151 = PCG32_nextUint_0(prng_0);
-
-#line 543
-        value_0.ep2_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S151 % 16U];
-        if((dist_0(g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S151 % 16U], value_0.ep0_0, value_0.ep1_0)) > 0.30000001192092896)
-        {
-
-#line 545
-            break;
-        }
-
-#line 542
-        i_6 = i_6 + 1;
-
-#line 542
-    }
-
-#line 542
-    i_6 = 0;
-
-#line 548
-    for(;;)
-    {
-
-#line 548
-        if(i_6 < 8)
-        {
-        }
-        else
-        {
-
-#line 548
-            break;
-        }
-
-#line 549
-        uint _S152 = PCG32_nextUint_0(prng_0);
-
-#line 549
-        value_0.ep3_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S152 % 16U];
-        if((dist_0(g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S152 % 16U], value_0.ep0_0, value_0.ep1_0)) > 0.30000001192092896)
-        {
-
-#line 551
-            break;
-        }
-
-#line 548
-        i_6 = i_6 + 1;
-
-#line 548
-    }
-
-#line 548
-    i_6 = 0;
-
-#line 554
-    for(;;)
-    {
-
-#line 554
-        if(i_6 < 8)
-        {
-        }
-        else
-        {
-
-#line 554
-            break;
-        }
-
-#line 555
-        uint _S153 = PCG32_nextUint_0(prng_0);
-
-#line 555
-        value_0.ep4_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S153 % 16U];
-        if((dist_0(g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S153 % 16U], value_0.ep0_0, value_0.ep1_0)) <= 0.30000001192092896)
-        {
-
-#line 557
-            i_6 = i_6 + 1;
-
-#line 554
-            continue;
-        }
-
-
-
-        if((dist_0(value_0.ep4_0, value_0.ep2_0, value_0.ep3_0)) > 0.30000001192092896)
-        {
-
-#line 560
-            break;
-        }
-
-#line 554
-        i_6 = i_6 + 1;
-
-#line 554
-    }
-
-#line 554
-    i_6 = 0;
-
-#line 563
-    for(;;)
-    {
-
-#line 563
-        if(i_6 < 8)
-        {
-        }
-        else
-        {
-
-#line 563
-            break;
-        }
-
-#line 564
-        uint _S154 = PCG32_nextUint_0(prng_0);
-
-#line 564
-        value_0.ep5_0 = g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S154 % 16U];
-        if((dist_0(g_groundtruth_0._data[uint(blockIdx_1)].pixels_0[_S154 % 16U], value_0.ep0_0, value_0.ep1_0)) <= 0.30000001192092896)
-        {
-
-#line 566
-            i_6 = i_6 + 1;
-
-#line 563
-            continue;
-        }
-
-
-
-        if((dist_0(value_0.ep5_0, value_0.ep2_0, value_0.ep3_0)) > 0.30000001192092896)
-        {
-
-#line 569
-            break;
-        }
-
-#line 563
-        i_6 = i_6 + 1;
-
-#line 563
-    }
-
-#line 563
+#line 709
     int step_0 = 0;
-
-#line 573
     for(;;)
     {
 
-#line 573
-        if(step_0 < int(steps_1))
+#line 710
+        uint _S208 = uint(step_0);
+
+#line 710
+        if(_S208 < steps_1)
         {
         }
         else
         {
 
-#line 573
+#line 710
             break;
         }
-        CompressedTextureBlock3P_Differential_0 _S155 = CompressedTextureBlock3P_x24_syn_dzero_0();
 
-#line 575
-        DiffPair_CompressedTextureBlock3P_0 cb_pair_0;
-
-#line 575
-        cb_pair_0.primal_0 = value_0;
-
-#line 575
-        cb_pair_0.differential_0 = _S155;
-
-#line 575
-        s_bwd_loss_3P_0(blockIdx_1, cb_pair_0, 1.0);
+#line 710
+        bool _S209;
 
 
-
-        value_0.ep0_0 = saturate_0(value_0.ep0_0 - cb_pair_0.differential_0.ep0_2 * _S142);
-        value_0.ep1_0 = saturate_0(value_0.ep1_0 - cb_pair_0.differential_0.ep1_2 * _S142);
-        value_0.ep2_0 = saturate_0(value_0.ep2_0 - cb_pair_0.differential_0.ep2_1 * _S142);
-        value_0.ep3_0 = saturate_0(value_0.ep3_0 - cb_pair_0.differential_0.ep3_1 * _S142);
-        value_0.ep4_0 = saturate_0(value_0.ep4_0 - cb_pair_0.differential_0.ep4_1 * _S142);
-        value_0.ep5_0 = saturate_0(value_0.ep5_0 - cb_pair_0.differential_0.ep5_1 * _S142);
-
-#line 584
-        bool _S156;
-        if(_S143)
+        if(_S204 > 0U)
         {
 
-#line 585
-            uint _S157 = uint(step_0);
+#line 713
+            _S209 = _S208 >= 1U;
 
-#line 585
-            if(_S157 >= _S145)
+#line 713
+        }
+        else
+        {
+
+#line 713
+            _S209 = false;
+
+#line 713
+        }
+
+#line 713
+        bool should_use_lsq_0;
+
+#line 713
+        if(_S209)
+        {
+
+#line 713
+            should_use_lsq_0 = _S208 <= (1U + _S204);
+
+#line 713
+        }
+        else
+        {
+
+#line 713
+            should_use_lsq_0 = false;
+
+#line 713
+        }
+        if(should_use_lsq_0)
+        {
+
+
+            if(g_params_0.use_pca_0)
             {
 
-#line 585
-                _S156 = true;
+#line 718
+                uint _S210 = solve_pca_eps_0(block_0, block_0.ep0_0, block_0.ep1_0, blockIdx_0, 0);
 
-#line 585
+#line 718
+                uint _S211 = solve_pca_eps_0(block_0, block_0.ep2_0, block_0.ep3_0, blockIdx_0, 1);
+
+#line 718
+                uint _S212 = solve_pca_eps_0(block_0, block_0.ep4_0, block_0.ep5_0, blockIdx_0, 2);
+
+#line 718
             }
             else
             {
 
-#line 585
-                _S156 = _S157 >= (steps_1 - 1U);
+#line 718
+                solve_aabb_eps_0(block_0, block_0.ep0_0, block_0.ep1_0, blockIdx_0, 0);
 
-#line 585
+#line 718
+                solve_aabb_eps_0(block_0, block_0.ep2_0, block_0.ep3_0, blockIdx_0, 1);
+
+#line 718
+                solve_aabb_eps_0(block_0, block_0.ep4_0, block_0.ep5_0, blockIdx_0, 2);
+
+#line 718
             }
 
-#line 585
+#line 714
         }
         else
         {
 
-#line 585
-            _S156 = false;
+#line 730
+            CompressedTextureBlock3P_Differential_0 _S213 = CompressedTextureBlock3P_x24_syn_dzero_0();
 
-#line 585
+#line 730
+            DiffPair_CompressedTextureBlock3P_0 cb_pair_0;
+
+#line 730
+            cb_pair_0.primal_0 = block_0;
+
+#line 730
+            cb_pair_0.differential_0 = _S213;
+
+#line 730
+            s_bwd_loss_3P_0(blockIdx_0, cb_pair_0, 1.0);
+
+
+            block_0.ep0_0 = saturate_0(block_0.ep0_0 - cb_pair_0.differential_0.ep0_2 * _S201);
+            block_0.ep1_0 = saturate_0(block_0.ep1_0 - cb_pair_0.differential_0.ep1_2 * _S201);
+            block_0.ep2_0 = saturate_0(block_0.ep2_0 - cb_pair_0.differential_0.ep2_1 * _S201);
+            block_0.ep3_0 = saturate_0(block_0.ep3_0 - cb_pair_0.differential_0.ep3_1 * _S201);
+            block_0.ep4_0 = saturate_0(block_0.ep4_0 - cb_pair_0.differential_0.ep4_1 * _S201);
+            block_0.ep5_0 = saturate_0(block_0.ep5_0 - cb_pair_0.differential_0.ep5_1 * _S201);
+
+#line 714
         }
 
-#line 585
-        uint _S158 = uint(step_0);
+#line 714
+        bool _S214;
 
-#line 585
-        one_step_opt_0(value_0, blockIdx_1, _S156, _S158 <= _S146);
-
-        uint _S159 = _S158 % _S147;
-
-#line 587
-        if(_S159 == 0U)
+#line 741
+        if(_S202)
         {
 
-#line 588
-            uint iter_0 = _S158 / _S147;
-            uvec2 _S160 = (clockRealtime2x32EXT());
+#line 741
+            if(_S208 >= _S203)
+            {
 
-#line 589
-            g_diagnostics_0._data[uint(blockIdx_1)].timestamps_0[iter_0] = _S160;
-            g_diagnostics_0._data[uint(blockIdx_1)].loss_log_0[iter_0] = loss_3P_0(blockIdx_1, value_0);
+#line 741
+                _S214 = true;
 
-            uint raw_map_3 = pack_partition_indices_to_mask_0(value_0.partition_logits_0.data_0);
+#line 741
+            }
+            else
+            {
 
+#line 741
+                _S214 = _S208 >= (steps_1 - 1U);
 
+#line 741
+            }
 
-            g_diagnostics_0._data[uint(blockIdx_1)].partition_hamming_error_log_0[iter_0] = hamming_distance_2b_0(raw_map_3, g_lut_0.lut3_0[get_closest_seed_0(raw_map_3, false).x]);
-            g_diagnostics_0._data[uint(blockIdx_1)].ideal_partition_log_0[iter_0] = raw_map_3;
+#line 741
+        }
+        else
+        {
 
-#line 587
+#line 741
+            _S214 = false;
+
+#line 741
         }
 
-#line 573
+#line 741
+        CompressedTextureBlock3P_one_step_solve_partition_0(block_0, blockIdx_0, _S214);
+
+        uint _S215 = _S208 % _S207;
+
+#line 743
+        if(_S215 == 0U)
+        {
+
+#line 744
+            uint iter_1 = _S208 / _S207;
+            uvec2 _S216 = (clockRealtime2x32EXT());
+
+#line 745
+            g_diagnostics_0._data[uint(blockIdx_0)].timestamps_0[iter_1] = _S216;
+            g_diagnostics_0._data[uint(blockIdx_0)].loss_log_0[iter_1] = loss_3P_0(blockIdx_0, block_0);
+
+            uint pattern_2 = CompressedTextureBlock3P_pack_partition_indices_0(block_0);
+            uint final_mask_1 = 0U;
+
+            if((block_0.max_partitions_1) == 3U)
+            {
+
+#line 751
+                uint _S217 = get_closest_seed3_0(pattern_2, perm_5, final_mask_1);
+
+#line 751
+            }
+            else
+            {
+
+#line 752
+                uint _S218 = get_closest_seed2_0(pattern_2, perm_5, final_mask_1);
+
+#line 751
+            }
+
+#line 751
+            uint _S219;
+
+
+            if((block_0.max_partitions_1) == 3U)
+            {
+
+#line 754
+                uint _S220 = best_perm_distance_s3_0(pattern_2, final_mask_1, perm_5);
+
+#line 754
+                _S219 = _S220;
+
+#line 754
+            }
+            else
+            {
+
+#line 755
+                uint _S221 = best_perm_distance_s2_0(pattern_2, final_mask_1, perm_5);
+
+#line 755
+                _S219 = _S221;
+
+#line 754
+            }
+
+#line 753
+            g_diagnostics_0._data[uint(blockIdx_0)].partition_hamming_error_log_0[iter_1] = _S219;
+
+
+            g_diagnostics_0._data[uint(blockIdx_0)].ideal_partition_log_0[iter_1] = pattern_2;
+
+#line 761
+            g_diagnostics_0._data[uint(blockIdx_0)].partition_count_0[iter_1] = uint((hamming_distance_2b_0(pattern_2, 0U)) < 16U) + uint((hamming_distance_2b_0(pattern_2, 1431655765U)) < 16U) + uint((hamming_distance_2b_0(pattern_2, 2863311530U)) < 16U);
+
+#line 743
+        }
+
+#line 710
         step_0 = step_0 + 1;
 
-#line 573
+#line 710
     }
 
-#line 601
-    uvec2 _S161 = (clockRealtime2x32EXT());
-
-#line 601
-    g_diagnostics_0._data[uint(blockIdx_1)].optim_ended_clock_0 = _S161;
-    g_compressedBlock3P_0._data[uint(blockIdx_1)] = value_0;
-    g_reconstructed_0._data[uint(blockIdx_1)] = reconstruct_0(value_0, blockIdx_1);
-    g_diagnostics_0._data[uint(blockIdx_1)].partition_hamming_error_0 = hamming_distance_2b_0(value_0.ideal_partition_map_0, value_0.astc_partition_map_0);
-    g_final_loss_0._data[uint(blockIdx_1)] = loss_3P_0(blockIdx_1, value_0);
-    uvec2 _S162 = (clockRealtime2x32EXT());
-
-#line 606
-    g_diagnostics_0._data[uint(blockIdx_1)].finished_clock_0 = _S162;
-    return;
-}
-
-#version 450
-layout(row_major) uniform;
-layout(row_major) buffer;
-
-#line 51 0
-struct CompressStepParams_0
-{
-    float learning_rate_0;
-    uint steps_0;
-    uint snap_steps_0;
-    uint num_blocks_0;
-    uint snap_0;
-};
-
-
-#line 76
-layout(std430, binding = 5) buffer StructuredBuffer_CompressStepParams_t_0 {
-    CompressStepParams_0 _data[];
-} g_compress_step_params_0;
-
-#line 73
-layout(std430, binding = 4) buffer StructuredBuffer_float_t_0 {
-    float _data[];
-} g_final_loss_0;
-
-#line 8
-struct TextureBlock_0
-{
-    vec3  pixels_0[16];
-};
-
-
-#line 61
-layout(std430, binding = 0) readonly buffer StructuredBuffer_TextureBlock_t_0 {
-    TextureBlock_0 _data[];
-} g_groundtruth_0;
-
-#line 27
-struct NonDifferentiableWeights_0
-{
-    float  data_0[16];
-};
-
-
-#line 37
-struct CompressedTextureBlock3P_0
-{
-    vec3 ep0_0;
-    vec3 ep1_0;
-    vec3 ep2_0;
-    vec3 ep3_0;
-    vec3 ep4_0;
-    vec3 ep5_0;
-    NonDifferentiableWeights_0 weights_0;
-    NonDifferentiableWeights_0 partition_logits_0;
-    uint astc_partition_map_0;
-    uint ideal_partition_map_0;
-    uint astc_seed_0;
-    uint perm_0;
-};
-
-
-#line 70
-layout(std430, binding = 3) buffer StructuredBuffer_CompressedTextureBlock3P_t_0 {
-    CompressedTextureBlock3P_0 _data[];
-} g_compressedBlock3P_0;
-
-#line 31
-float NonDifferentiableWeights_operatorx5Bx5D_get_0(NonDifferentiableWeights_0 this_0, int n_0)
-{
-
-#line 31
-    return this_0.data_0[n_0];
-}
-
-
-#line 514
-TextureBlock_0 decompress3P_0(uint _S1)
-{
-
-#line 514
-    CompressedTextureBlock3P_0 _S2 = g_compressedBlock3P_0._data[uint(_S1)];
-
-#line 451
-    TextureBlock_0 outputBlock_0;
-
-#line 451
-    uint i_0 = 0U;
-    for(;;)
-    {
-
-#line 452
-        if(i_0 < 16U)
-        {
-        }
-        else
-        {
-
-#line 452
-            break;
-        }
-        int _S3 = int(i_0);
-
-#line 454
-        float _S4 = NonDifferentiableWeights_operatorx5Bx5D_get_0(_S2.weights_0, _S3);
-        int partition_0 = int(NonDifferentiableWeights_operatorx5Bx5D_get_0(_S2.partition_logits_0, _S3));
-        bool _S5 = partition_0 == 0;
-
-#line 456
-        vec3 e0_0;
-
-#line 456
-        if(_S5)
-        {
-
-#line 456
-            e0_0 = _S2.ep0_0;
-
-#line 456
-        }
-        else
-        {
-
-#line 456
-            if(partition_0 == 1)
-            {
-
-#line 456
-                e0_0 = _S2.ep2_0;
-
-#line 456
-            }
-            else
-            {
-
-#line 456
-                e0_0 = _S2.ep4_0;
-
-#line 456
-            }
-
-#line 456
-        }
-
-#line 456
-        vec3 e1_0;
-        if(_S5)
-        {
-
-#line 457
-            e1_0 = _S2.ep1_0;
-
-#line 457
-        }
-        else
-        {
-
-#line 457
-            if(partition_0 == 1)
-            {
-
-#line 457
-                e1_0 = _S2.ep3_0;
-
-#line 457
-            }
-            else
-            {
-
-#line 457
-                e1_0 = _S2.ep5_0;
-
-#line 457
-            }
-
-#line 457
-        }
-        outputBlock_0.pixels_0[i_0] = mix(e0_0, e1_0, vec3(_S4));
-
-#line 452
-        i_0 = i_0 + 1U;
-
-#line 452
-    }
-
-#line 460
-    return outputBlock_0;
-}
-
-
-#line 460
-float loss_3P_0(uint _S6, uint _S7)
-{
-
-#line 460
-    TextureBlock_0 _S8 = decompress3P_0(_S7);
-
-#line 460
-    int i_1 = 0;
-
-#line 460
-    float totalError_0 = 0.0;
-
-#line 471
-    for(;;)
-    {
-
-#line 471
-        if(i_1 < 16)
-        {
-        }
-        else
-        {
-
-#line 471
-            break;
-        }
-        vec3 diff_0 = _S8.pixels_0[i_1] - g_groundtruth_0._data[uint(_S6)].pixels_0[i_1];
-        float totalError_1 = totalError_0 + dot(diff_0, diff_0);
-
-#line 471
-        i_1 = i_1 + 1;
-
-#line 471
-        totalError_0 = totalError_1;
-
-#line 471
-    }
-
-#line 477
-    return totalError_0;
-}
-
-
-#line 611
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
-
-#line 613
-    uint blockIdx_0 = gl_GlobalInvocationID.x;
-    if(blockIdx_0 >= (g_compress_step_params_0._data[uint(0)].num_blocks_0))
-    {
-
-#line 614
-        return;
-    }
-
-#line 615
-    g_final_loss_0._data[uint(blockIdx_0)] = loss_3P_0(blockIdx_0, blockIdx_0);
+#line 765
+    uvec2 _S222 = (clockRealtime2x32EXT());
+
+#line 765
+    g_diagnostics_0._data[uint(blockIdx_0)].optim_ended_clock_0 = _S222;
+    g_compressedBlock3P_0._data[uint(blockIdx_0)] = block_0;
+    g_reconstructed_0._data[uint(blockIdx_0)] = CompressedTextureBlock3P_reconstruct_0(block_0);
+    uint _S223 = best_perm_distance_s3_0(block_0.ideal_partition_map_0, block_0.astc_partition_map_0, perm_5);
+
+#line 768
+    g_diagnostics_0._data[uint(blockIdx_0)].partition_hamming_error_0 = _S223;
+    g_final_loss_0._data[uint(blockIdx_0)] = loss_3P_0(blockIdx_0, block_0);
+    uvec2 _S224 = (clockRealtime2x32EXT());
+
+#line 770
+    g_diagnostics_0._data[uint(blockIdx_0)].finished_clock_0 = _S224;
     return;
 }
 

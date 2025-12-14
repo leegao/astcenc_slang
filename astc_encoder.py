@@ -11,36 +11,10 @@ Image.MAX_IMAGE_PIXELS = None
 class AstcPartitionLut:
     def __init__(self, device):
         self.device = device
-        self.lut_ideal_to_seed_file = "astc_2p_4x4_lut.bin"
-        self.lut_seed_to_mask_file = "lut2_packed.bin"
-        
-        if not (Path(self.lut_ideal_to_seed_file).exists() and Path(self.lut_seed_to_mask_file).exists()):
-            raise Exception("astc_2p_4x4_lut.bin + astc_2p_seed_to_mask_lut.bin not found")
-
-        self.lut_ideal_to_seed_np = np.fromfile(self.lut_ideal_to_seed_file, dtype=np.uint16).astype(np.uint32)
-        self.lut_seed_to_mask_np = np.fromfile(self.lut_seed_to_mask_file, dtype=np.uint32).astype(np.uint32)
+        self.lut2 = np.fromfile("lut2_packed.bin", dtype=np.uint32).astype(np.uint32)
         self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
         self.astc_3p_4x4_lut_s3_np = np.fromfile("astc_3p_4x4_lut_s3.bin", dtype=np.uint32).astype(np.uint32)
         self.astc_2p_4x4_lut_s2_np = np.fromfile("astc_2p_4x4_lut_s2.bin", dtype=np.uint32).astype(np.uint32)
-        
-        
-        print(f"Loaded {len(self.lut_ideal_to_seed_np)} ideal-to-astc-seed entries.")
-        print(f"Loaded {len(self.lut_seed_to_mask_np)} astc-seed-to-mask entries.")
-
-    def create_gpu_buffers(self, ideal_layout, seed_layout):
-        ideal_buffer = self.device.create_buffer(
-            element_count=len(self.lut_ideal_to_seed_np),
-            resource_type_layout=ideal_layout,
-            usage=spy.BufferUsage.shader_resource,
-            data=self.lut_ideal_to_seed_np
-        )
-        seed_buffer = self.device.create_buffer(
-            element_count=len(self.lut_seed_to_mask_np),
-            resource_type_layout=seed_layout,
-            usage=spy.BufferUsage.shader_resource,
-            data=self.lut_seed_to_mask_np
-        )
-        return ideal_buffer, seed_buffer
 
 def load_and_tile_image(image_path):
     """Loads an image, pads it to be a multiple of 4x4, and tiles it into blocks."""
@@ -101,9 +75,6 @@ def main(args):
     device = spy.Device(enable_debug_layers=False)
     astc_lut = AstcPartitionLut(device)
 
-    compress_program = device.load_program("astc_encoder_soft.slang", ["compress_step"])
-    compress_kernel = device.create_compute_kernel(compress_program)
-
     compress_3P_program = device.load_program("astc_encoder3_soft.slang", ["compress_3P_step"])
     compress_3P_kernel = device.create_compute_kernel(compress_3P_program)
     
@@ -120,21 +91,21 @@ def main(args):
         ('partition_count', (np.uint32, 20)),
     ])
     
-    comp_block_dtype_1P = np.dtype([
-        ('ep0', (np.float32, 3)),
-        ('ep1', (np.float32, 3)),
-        ('weights', (np.float32, 16)),
-    ])
+    # comp_block_dtype_1P = np.dtype([
+    #     ('ep0', (np.float32, 3)),
+    #     ('ep1', (np.float32, 3)),
+    #     ('weights', (np.float32, 16)),
+    # ])
 
-    comp_block_dtype_2P = np.dtype([
-        ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
-        ('ep2', (np.float32, 3)), ('ep3', (np.float32, 3)),
-        ('weights', (np.float32, 16)),
-        ('partition_logits', (np.float32, 16)),
-        ('astc_partition_map', np.uint32),
-        ('ideal_partition_map', np.uint32),
-        ('astc_seed', np.uint32),
-    ])
+    # comp_block_dtype_2P = np.dtype([
+    #     ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
+    #     ('ep2', (np.float32, 3)), ('ep3', (np.float32, 3)),
+    #     ('weights', (np.float32, 16)),
+    #     ('partition_logits', (np.float32, 16)),
+    #     ('astc_partition_map', np.uint32),
+    #     ('ideal_partition_map', np.uint32),
+    #     ('astc_seed', np.uint32),
+    # ])
 
     comp_block_dtype_3P = np.dtype([
         ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
@@ -159,18 +130,18 @@ def main(args):
         ('max_partitions', np.uint32),
     ])
 
-    reflection = compress_kernel.reflection
+    reflection = compress_3P_kernel.reflection
 
     groundtruth_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_groundtruth,
         usage=spy.BufferUsage.shader_resource, data=groundtruth_data
     )
 
-    initial_params_1p = np.random.rand(num_blocks, 22).astype(np.float32) # ep0, ep1, weights
-    compressed_buffer = device.create_buffer(
-        element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock,
-        usage=spy.BufferUsage.unordered_access, data=initial_params_1p
-    )
+    # initial_params_1p = np.random.rand(num_blocks, 22).astype(np.float32) # ep0, ep1, weights
+    # compressed_buffer = device.create_buffer(
+    #     element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock,
+    #     usage=spy.BufferUsage.unordered_access, data=initial_params_1p
+    # )
     
     # initial_params_2p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_2P)
     # initial_params_2p_struct['ep0'] = np.random.rand(num_blocks, 3)
@@ -198,22 +169,6 @@ def main(args):
         usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.float32)
     )
 
-    # compress_params_data = np.array(
-    #     [(
-    #         args.lr,
-    #         args.m,
-    #         args.m / 10 if args.snap_steps == 0 else args.snap_steps,
-    #         num_blocks,
-    #         0 if args.no_snap else 1,
-    #         3 if args.use_3p else (2 if args.use_2p else 1)
-    #     )],
-    #     dtype=params_dtype
-    # )
-    # compress_params_buffer = device.create_buffer(
-    #     element_count=1, resource_type_layout=reflection.g_params,
-    #     usage=spy.BufferUsage.unordered_access, data=compress_params_data.view(np.float32)
-    # )
-
     final_loss_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_final_loss,
         usage=spy.BufferUsage.unordered_access
@@ -227,10 +182,6 @@ def main(args):
     final_diagnostics_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_diagnostics,
         usage=spy.BufferUsage.unordered_access
-    )
-
-    lut_ideal_buffer, lut_seed_buffer = astc_lut.create_gpu_buffers(
-        reflection.g_lut_ideal_to_seed, reflection.g_lut_seed_to_mask
     )
 
     astc_3p_4x4_lut_s3_buffer = device.create_buffer(
@@ -249,31 +200,36 @@ def main(args):
 
     dispatch_vars = {
         "g_groundtruth": groundtruth_buffer,
-        "g_compressedBlock": compressed_buffer,
+        # "g_compressedBlock": compressed_buffer,
         # "g_compressedBlock2P": compressed_2P_buffer,
         "g_compressedBlock3P": compressed_3P_buffer,
         # "g_compress_step_params": compress_params_buffer,
         "g_final_loss": final_loss_buffer,
         "g_reconstructed": final_reconstructed_buffer,
         'g_diagnostics': final_diagnostics_buffer,
-        "g_lut_ideal_to_seed": lut_ideal_buffer,
-        "g_lut_seed_to_mask": lut_seed_buffer,
+        # "g_lut_ideal_to_seed": lut_ideal_buffer,
+        # "g_lut_seed_to_mask": lut_seed_buffer,
         "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
         "g_astc_2p_4x4_lut_s2": astc_2p_4x4_lut_s2_buffer,
-        "g_lut": {"lut2": astc_lut.lut_seed_to_mask_np, "lut3": astc_lut.lut3},
+        "g_lut": {
+            "lut2": astc_lut.lut2,
+            "lut3": astc_lut.lut3,
+        },
         "g_params": {
             "learning_rate": args.lr,
             "steps": args.m,
             "snap_steps": args.snap_steps,
             "num_blocks": num_blocks,
-            "snap": 0 if args.no_snap else 1,
+            "snap": bool(not args.no_snap),
             "max_partitions": 3 if args.use_3p else (2 if args.use_2p else 1),
             "debug_reconstruction": args.debug_reconstruction,
+            "exact_steps": args.exact_steps,
+            "use_pca": args.use_pca,
         }
     }
 
     grid = (num_blocks, 1, 1)
-    kernel_to_run = compress_3P_kernel if args.use_2p else compress_kernel
+    kernel_to_run = compress_3P_kernel if args.use_2p else compress_3P_kernel
     if args.use_3p:
         kernel_to_run = compress_3P_kernel
 
@@ -289,7 +245,9 @@ def main(args):
     print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 100000:.2f} ms over {num_blocks} threads")
     print(f"  Wall clock: {wall_end - wall_start}")
     for i, loss in enumerate(loss_log.mean(0)):
-        print(f"Step {i * (args.m // 20)}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
+        checkpoint = max(1, args.m // 20)
+        if i * checkpoint >= args.m: break
+        print(f"Step {i * checkpoint}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
         if args.use_2p or args.use_3p:
             print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
             print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
@@ -303,7 +261,6 @@ def main(args):
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
     if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
-        # astc_seeds = compressed_2P_buffer.to_numpy().view(comp_block_dtype_2P)['astc_seed']
     final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
 
@@ -329,6 +286,8 @@ if __name__ == "__main__":
     parser.add_argument("--snap_steps", type=int, default=0, help="Frequency of snapping partitions to valid ASTC maps (for 2P mode).")
     parser.add_argument("--no_snap", action="store_true", help="Don't snap to astc valid patterns")
     parser.add_argument("--debug_reconstruction", action="store_true", help="Use debug output for reconstruction")
+    parser.add_argument("--exact_steps", type=int, default=0, help="Number of exact steps to run")
+    parser.add_argument("--use_pca", action="store_true", help="Use PCA instead of AABB")
 
 
     args = parser.parse_args()

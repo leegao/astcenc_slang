@@ -34,15 +34,26 @@ struct NonDifferentiableWeights {
     }
 }
 
+struct NonDifferentiableIntWeights {
+    int data[16];
+    __subscript(int n) -> int
+    {
+        get { return data[n]; }
+        set { data[n] = newValue; }
+    }
+}
+
 struct Params
 {
     float learning_rate;
     uint steps;
     uint snap_steps;
     uint num_blocks;
-    uint snap;
+    bool snap;
     uint max_partitions;
     bool debug_reconstruction;
+    uint exact_steps;
+    bool use_pca;
 };
 ConstantBuffer<Params> g_params;
 
@@ -296,7 +307,7 @@ struct CompressedTextureBlock3P : IDifferentiable
     float3 ep4, ep5; // partition 2
     
     no_diff NonDifferentiableWeights weights; // we don't have to gradient descent on this since we can do a full solve
-    no_diff NonDifferentiableWeights partition_index; // Partition blend logits
+    no_diff NonDifferentiableIntWeights partition_index; // Partition blend logits
     no_diff uint astc_partition_map; // Final 16-bit valid partition map
     no_diff uint ideal_partition_map;
     no_diff uint astc_seed;
@@ -452,6 +463,10 @@ struct CompressedTextureBlock3P : IDifferentiable
 
     [mutating]
     void one_step_solve_partition(TextureBlock groundtruth, bool should_snap) {
+        if (max_partitions == 1) {
+            solve_weights(groundtruth);
+            return;
+        }
         // Assume that the color endpoints are already solved
         uint partitions = solve_partition(groundtruth);
         // "Scramble" any blocks that settle onto the single-partition basin
@@ -544,6 +559,101 @@ struct CompressedTextureBlock3P : IDifferentiable
     }
 };
 
+// Potentially use this vs solve_aabb_for_partition
+uint solve_pca_eps(CompressedTextureBlock3P block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
+{
+    float3 axis = float3(0.17, 0.83, 0.38); 
+    float3 centroid = float3(0);
+    uint count = 0;
+    
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        if (int(block.partition_index[i]) == partition_id)
+        {
+            centroid += groundtruth.pixels[i];
+            count += 1;
+        }
+    }
+
+    if (count <= 1) {
+        ep0 = saturate(count > 0 ? centroid / count : float3(0));
+        ep1 = ep0;
+        return uint(count);
+    }
+    
+    centroid /= count;
+    float xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+    
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        if (int(block.partition_index[i]) == partition_id)
+        {
+            float3 d = groundtruth.pixels[i] - centroid;
+            xx += d.x * d.x;
+            xy += d.x * d.y;
+            xz += d.x * d.z;
+            yy += d.y * d.y;
+            yz += d.y * d.z;
+            zz += d.z * d.z;
+        }
+    }
+
+    // Power iterations
+    [unroll]
+    for(int iter = 0; iter < 4; iter++)
+    {
+        float3 new_axis;
+        new_axis.x = xx * axis.x + xy * axis.y + xz * axis.z;
+        new_axis.y = xy * axis.x + yy * axis.y + yz * axis.z;
+        new_axis.z = xz * axis.x + yz * axis.y + zz * axis.z;
+        axis = new_axis;
+    }
+
+    if (dot(axis, axis) < 1e-8) {
+        ep0 = saturate(centroid);
+        ep1 = saturate(centroid);
+        return count;
+    }
+    
+    axis = normalize(axis);
+    float min_t = 1000.0;
+    float max_t = -1000.0;
+
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        if (int(block.partition_index[i]) == partition_id)
+        {
+            float3 d = groundtruth.pixels[i] - centroid;
+            float t = dot(d, axis);
+            min_t = min(min_t, t);
+            max_t = max(max_t, t);
+        }
+    }
+
+    ep0 = saturate(centroid + axis * min_t);
+    ep1 = saturate(centroid + axis * max_t);
+    return count;
+}
+
+void solve_aabb_eps(CompressedTextureBlock3P block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
+{
+    float3 min_ep = 1, max_ep = 0;
+
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        bool inlier = block.partition_index[i] == partition_id;
+        min_ep = min(inlier ? groundtruth.pixels[i] : 1, min_ep);
+        max_ep = max(inlier ? groundtruth.pixels[i] : 0, max_ep);
+    }
+
+    ep0 = saturate(min_ep);
+    ep1 = saturate(max_ep);
+}
+
 [Differentiable]
 float loss_3P(
     no_diff TextureBlock groundtruth, // frozen
@@ -584,6 +694,8 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     uint steps = g_params.steps;
     bool can_snap = g_params.snap > 0;
     uint first_snap_step = g_params.snap_steps == 0 ? uint(steps * 0.5) : steps - g_params.snap_steps;
+    uint first_lsq_step = 1;
+    uint exact_steps = g_params.exact_steps;
 
     var prng = PCG32(0);
     block.max_partitions = g_params.max_partitions;
@@ -595,20 +707,36 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     }
 
     uint checkpoint = max(1, steps / 20);
-    for (int step = 0; step < int(steps); step++)
+    for (int step = 0; step < steps; step++)
     {
-        DifferentialPair<CompressedTextureBlock3P> cb_pair = diffPair(block);
-
-        // Coordinate descent, gradient optimize ep, one-step solve partition
-        // Backprop on the color eps
-        bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
-        CompressedTextureBlock3P.Differential gradient = cb_pair.d;
-        block.ep0 = saturate(block.ep0 - gradient.ep0 * lr);
-        block.ep1 = saturate(block.ep1 - gradient.ep1 * lr);
-        block.ep2 = saturate(block.ep2 - gradient.ep2 * lr);
-        block.ep3 = saturate(block.ep3 - gradient.ep3 * lr);
-        block.ep4 = saturate(block.ep4 - gradient.ep4 * lr);
-        block.ep5 = saturate(block.ep5 - gradient.ep5 * lr);
+        // Coordinate descent: gradient optimize ep, one-step solve partition
+        bool should_use_lsq = exact_steps > 0 && (step >= first_lsq_step) && (step <= first_lsq_step + exact_steps);
+        if (should_use_lsq) {
+            // "Exact" approximate solve_pca_eps vs solve_aabb_eps
+            // Note that the exact solves tend to get stuck in local optimums that even the gradient
+            // optimizer can't climb out of. In some problems, reaches the local optimum faster
+            if (g_params.use_pca) {
+                solve_pca_eps(block, block.ep0, block.ep1, groundtruth, 0);
+                solve_pca_eps(block, block.ep2, block.ep3, groundtruth, 1);
+                solve_pca_eps(block, block.ep4, block.ep5, groundtruth, 2);
+            } else {
+                solve_aabb_eps(block, block.ep0, block.ep1, groundtruth, 0);
+                solve_aabb_eps(block, block.ep2, block.ep3, groundtruth, 1);
+                solve_aabb_eps(block, block.ep4, block.ep5, groundtruth, 2);
+            }
+        } else {
+            // Backprop on the color eps
+            // Generally reaches the optimum ~ same 
+            DifferentialPair<CompressedTextureBlock3P> cb_pair = diffPair(block);
+            bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
+            CompressedTextureBlock3P.Differential gradient = cb_pair.d;
+            block.ep0 = saturate(block.ep0 - gradient.ep0 * lr);
+            block.ep1 = saturate(block.ep1 - gradient.ep1 * lr);
+            block.ep2 = saturate(block.ep2 - gradient.ep2 * lr);
+            block.ep3 = saturate(block.ep3 - gradient.ep3 * lr);
+            block.ep4 = saturate(block.ep4 - gradient.ep4 * lr);
+            block.ep5 = saturate(block.ep5 - gradient.ep5 * lr);
+        }
         // One-step solve the partition
         block.one_step_solve_partition(groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));
 
