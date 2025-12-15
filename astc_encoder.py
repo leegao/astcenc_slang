@@ -248,6 +248,8 @@ def main(args):
     wc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
     fwc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
     if not args.no_quantization:
+        print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
+        print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
         print(f"Mean predicted vs best color quantization method error: {(((np.log2(wc.T[1]) - np.log2(fwc.T[1])) ** 2) ** 0.5).mean():0.3} bits")
 
     reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
