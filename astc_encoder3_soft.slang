@@ -24,25 +24,6 @@ struct Diagnostics
     uint partition_count[20];
 };
 
-// Frozen weights (to avoid generating expensive derivatives in the bkw pass)
-struct NonDifferentiableWeights {
-    float data[16];
-    __subscript(int n) -> float
-    {
-        get { return data[n]; }
-        set { data[n] = newValue; }
-    }
-}
-
-struct NonDifferentiableIntWeights {
-    int data[16];
-    __subscript(int n) -> int
-    {
-        get { return data[n]; }
-        set { data[n] = newValue; }
-    }
-}
-
 struct Params
 {
     float learning_rate;
@@ -54,6 +35,7 @@ struct Params
     bool debug_reconstruction;
     uint exact_steps;
     bool use_pca;
+    uint seed;
 };
 ConstantBuffer<Params> g_params;
 
@@ -67,7 +49,7 @@ RWStructuredBuffer<TextureBlock> g_reconstructed;
 RWStructuredBuffer<Diagnostics> g_diagnostics;
 
 // The ASTC/BC compressed block parameters for the 2-partition problem (ep0,ep1,ep2,ep3, 16x weights, 16x partition logits)
-RWStructuredBuffer<CompressedTextureBlock3P> g_compressedBlock3P;
+RWStructuredBuffer<CompressedTextureBlock> g_compressedBlock3P;
 
 // The loss of the encoded block
 RWStructuredBuffer<float> g_final_loss;
@@ -115,7 +97,7 @@ public struct PCG32
 }
 
 [UnscopedEnum]
-enum Permutation : uint
+enum Permutation : uint8_t
 {
     Id,
     Swap01,
@@ -299,28 +281,76 @@ uint get_closest_seed2(uint input, out Permutation permutation, out uint final_p
     return seed;
 }
 
-// The ASTC/BC encoder problem (single-partition) is to solve for
-struct CompressedTextureBlock3P : IDifferentiable
+T quantize<T:__BuiltinFloatingPointType>(T value, uint range = 255)
 {
-    float3 ep0, ep1; // partition 1
-    float3 ep2, ep3; // partition 2
-    float3 ep4, ep5; // partition 2
+    T scale = T(range);
+    return round(value * scale) / scale;
+}
+
+vector<E, M> quantize<E:__BuiltinFloatingPointType, let M: int>(vector<E, M> value, uint range = 255) 
+{
+    vector<E, M> scale = vector<E, M>(E(range));
+    return round(value * scale) / scale;
+}
+
+// Frozen weights (to avoid generating expensive derivatives in the bkw pass)
+struct NonDifferentiableFP8Weights {
+    uint8_t data[16];
+    __subscript(int n) -> float
+    {
+        get { return float(data[n]) / 255; }
+        set { data[n] = uint8_t(round(saturate(newValue) * 255)); }
+    }
+}
+
+struct NonDifferentiableIntPartitions {
+    int8_t data[16];
+    __subscript(int n) -> int
+    {
+        get { return data[n]; }
+        set { data[n] = int8_t(newValue); }
+    }
+}
+
+// The ASTC/BC encoder problem (single-partition) is to solve for
+struct CompressedTextureBlock : IDifferentiable
+{
+    // Can't turn these private due to how autodiff works
+    half3 _ep0, _ep1; // partition 1
+    half3 _ep2, _ep3; // partition 2
+    half3 _ep4, _ep5; // partition 2
     
-    no_diff NonDifferentiableWeights weights; // we don't have to gradient descent on this since we can do a full solve
-    no_diff NonDifferentiableIntWeights partition_index; // Partition blend logits
+    no_diff NonDifferentiableFP8Weights weights; // we don't have to gradient descent on this since we can do a full solve
+    no_diff NonDifferentiableIntPartitions partition_index; // Partition blend logits
     no_diff uint astc_partition_map; // Final 16-bit valid partition map
     no_diff uint ideal_partition_map;
-    no_diff uint astc_seed;
-    no_diff uint perm;
-    no_diff uint partition_count;
-    no_diff uint max_partitions;
+    no_diff uint16_t astc_seed;
+    no_diff uint8_t perm;
+    no_diff uint8_t partition_count;
+    no_diff uint8_t max_partitions;
+    no_diff uint16_t padding;
+
+#define EP_PROPERTY(ep0, _ep0) \
+    property float3 ep0 \
+    { \
+        [Differentiable] \
+        get { return _ep0; } \
+        set { _ep0 = quantize(half3(newValue), 255); } \
+    }
+
+    EP_PROPERTY(ep0, _ep0)
+    EP_PROPERTY(ep1, _ep1)
+    EP_PROPERTY(ep2, _ep2)
+    EP_PROPERTY(ep3, _ep3)
+    EP_PROPERTY(ep4, _ep4)
+    EP_PROPERTY(ep5, _ep5)
 
     uint pack_partition_indices()
     {
         uint raw_map = 0;
         for (int i = 0; i < 16; i++)
         {
-            uint logit = clamp(uint(round(partition_index[i])), 0, 2);
+            uint logit = clamp(partition_index[i], 0, 2);
             raw_map |= (logit << (i * 2));
         }
         return raw_map;
@@ -560,7 +590,7 @@ struct CompressedTextureBlock3P : IDifferentiable
 };
 
 // Potentially use this vs solve_aabb_for_partition
-uint solve_pca_eps(CompressedTextureBlock3P block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
+uint solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
 {
     float3 axis = float3(0.17, 0.83, 0.38); 
     float3 centroid = float3(0);
@@ -638,7 +668,7 @@ uint solve_pca_eps(CompressedTextureBlock3P block, inout float3 ep0, inout float
     return count;
 }
 
-void solve_aabb_eps(CompressedTextureBlock3P block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
+void solve_aabb_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
 {
     float3 min_ep = 1, max_ep = 0;
 
@@ -657,7 +687,7 @@ void solve_aabb_eps(CompressedTextureBlock3P block, inout float3 ep0, inout floa
 [Differentiable]
 float loss_3P(
     no_diff TextureBlock groundtruth, // frozen
-    CompressedTextureBlock3P compressed)
+    CompressedTextureBlock compressed)
 {
     TextureBlock reconstructed = compressed.decompress3P();
     float totalError = 0.0f;
@@ -688,7 +718,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
     Permutation perm = Id;
-    CompressedTextureBlock3P block = g_compressedBlock3P[blockIdx];
+    CompressedTextureBlock block = g_compressedBlock3P[blockIdx];
     TextureBlock groundtruth = g_groundtruth[blockIdx];
     float lr = g_params.learning_rate;
     uint steps = g_params.steps;
@@ -697,13 +727,12 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     uint first_lsq_step = 1;
     uint exact_steps = g_params.exact_steps;
 
-    var prng = PCG32(0);
+    var prng = PCG32(g_params.seed);
     block.max_partitions = g_params.max_partitions;
     block.random_initialize(groundtruth, prng);
     for (int i = 0; i < 16; i++) {
-        if (block.partition_index[i] >= block.max_partitions) {
-            block.partition_index[i] = prng.nextUint() % block.max_partitions;
-        }
+        block.weights[i] = prng.nextFloat();
+        block.partition_index[i] = prng.nextUint() % block.max_partitions;
     }
 
     uint checkpoint = max(1, steps / 20);
@@ -727,15 +756,15 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
         } else {
             // Backprop on the color eps
             // Generally reaches the optimum ~ same 
-            DifferentialPair<CompressedTextureBlock3P> cb_pair = diffPair(block);
+            DifferentialPair<CompressedTextureBlock> cb_pair = diffPair(block);
             bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
-            CompressedTextureBlock3P.Differential gradient = cb_pair.d;
-            block.ep0 = saturate(block.ep0 - gradient.ep0 * lr);
-            block.ep1 = saturate(block.ep1 - gradient.ep1 * lr);
-            block.ep2 = saturate(block.ep2 - gradient.ep2 * lr);
-            block.ep3 = saturate(block.ep3 - gradient.ep3 * lr);
-            block.ep4 = saturate(block.ep4 - gradient.ep4 * lr);
-            block.ep5 = saturate(block.ep5 - gradient.ep5 * lr);
+            CompressedTextureBlock.Differential gradient = cb_pair.d;
+            block.ep0 = saturate(block.ep0 - gradient._ep0 * lr);
+            block.ep1 = saturate(block.ep1 - gradient._ep1 * lr);
+            block.ep2 = saturate(block.ep2 - gradient._ep2 * lr);
+            block.ep3 = saturate(block.ep3 - gradient._ep3 * lr);
+            block.ep4 = saturate(block.ep4 - gradient._ep4 * lr);
+            block.ep5 = saturate(block.ep5 - gradient._ep5 * lr);
         }
         // One-step solve the partition
         block.one_step_solve_partition(groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));

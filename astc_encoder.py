@@ -90,35 +90,21 @@ def main(args):
         ('ideal_partition_log', (np.uint32, 20)),
         ('partition_count', (np.uint32, 20)),
     ])
-    
-    # comp_block_dtype_1P = np.dtype([
-    #     ('ep0', (np.float32, 3)),
-    #     ('ep1', (np.float32, 3)),
-    #     ('weights', (np.float32, 16)),
-    # ])
-
-    # comp_block_dtype_2P = np.dtype([
-    #     ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
-    #     ('ep2', (np.float32, 3)), ('ep3', (np.float32, 3)),
-    #     ('weights', (np.float32, 16)),
-    #     ('partition_logits', (np.float32, 16)),
-    #     ('astc_partition_map', np.uint32),
-    #     ('ideal_partition_map', np.uint32),
-    #     ('astc_seed', np.uint32),
-    # ])
 
     comp_block_dtype_3P = np.dtype([
-        ('ep0', (np.float32, 3)), ('ep1', (np.float32, 3)),
-        ('ep2', (np.float32, 3)), ('ep3', (np.float32, 3)),
-        ('ep4', (np.float32, 3)), ('ep5', (np.float32, 3)),
-        ('weights', (np.float32, 16)),
-        ('partition_logits', (np.float32, 16)),
+        ('ep0', (np.float16, 3)), ('ep1', (np.float16, 3)),
+        ('ep2', (np.float16, 3)), ('ep3', (np.float16, 3)),
+        ('ep4', (np.float16, 3)), ('ep5', (np.float16, 3)),
+        ('weights', (np.uint8, 16)),
+        ('partition_logits', (np.int8, 16)),
         ('astc_partition_map', np.uint32),
         ('ideal_partition_map', np.uint32),
-        ('astc_seed', np.uint32),
-        ('perm', np.uint32),
-        ('partition_count', np.uint32),
-        ('max_partitions', np.uint32),
+        ('astc_seed', np.uint16),
+        ('perm', np.uint8),
+        ('partition_count', np.uint8),
+        ('max_partitions', np.uint8),
+        ('padding1', np.uint16),
+        ('padding2', np.uint8),
     ])
 
     params_dtype = np.dtype([
@@ -127,7 +113,8 @@ def main(args):
         ('snap_steps', np.uint32),
         ('num_blocks', np.uint32),
         ('snap', np.uint32),
-        ('max_partitions', np.uint32),
+        ('max_partitions', np.uint8),
+        ('seed', np.uint32),
     ])
 
     reflection = compress_3P_kernel.reflection
@@ -136,24 +123,6 @@ def main(args):
         element_count=num_blocks, resource_type_layout=reflection.g_groundtruth,
         usage=spy.BufferUsage.shader_resource, data=groundtruth_data
     )
-
-    # initial_params_1p = np.random.rand(num_blocks, 22).astype(np.float32) # ep0, ep1, weights
-    # compressed_buffer = device.create_buffer(
-    #     element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock,
-    #     usage=spy.BufferUsage.unordered_access, data=initial_params_1p
-    # )
-    
-    # initial_params_2p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_2P)
-    # initial_params_2p_struct['ep0'] = np.random.rand(num_blocks, 3)
-    # initial_params_2p_struct['ep1'] = np.random.rand(num_blocks, 3)
-    # initial_params_2p_struct['ep2'] = np.random.rand(num_blocks, 3)
-    # initial_params_2p_struct['ep3'] = np.random.rand(num_blocks, 3)
-    # initial_params_2p_struct['weights'] = np.random.rand(num_blocks, 16)
-    # initial_params_2p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) - 0.5) # Center around 0
-    # compressed_2P_buffer = device.create_buffer(
-    #     element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock2P,
-    #     usage=spy.BufferUsage.unordered_access, data=initial_params_2p_struct.view(np.float32)
-    # )
 
     initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
     initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
@@ -166,7 +135,7 @@ def main(args):
     initial_params_3p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) * 2) # Center around 1
     compressed_3P_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_compressedBlock3P,
-        usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.float32)
+        usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.uint8)
     )
 
     final_loss_buffer = device.create_buffer(
@@ -225,6 +194,7 @@ def main(args):
             "debug_reconstruction": args.debug_reconstruction,
             "exact_steps": args.exact_steps,
             "use_pca": args.use_pca,
+            "seed": args.seed,
         }
     }
 
@@ -288,6 +258,7 @@ if __name__ == "__main__":
     parser.add_argument("--debug_reconstruction", action="store_true", help="Use debug output for reconstruction")
     parser.add_argument("--exact_steps", type=int, default=0, help="Number of exact steps to run")
     parser.add_argument("--use_pca", action="store_true", help="Use PCA instead of AABB")
+    parser.add_argument("--seed", type=int, default=0, help="Use PRNG seed (default 0)")
 
 
     args = parser.parse_args()
