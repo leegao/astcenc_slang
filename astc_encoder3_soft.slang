@@ -22,6 +22,7 @@ struct Diagnostics
     uint partition_hamming_error_log[20];
     uint ideal_partition_log[20];
     uint partition_count[20];
+    float final_unquantized_loss;
 };
 
 struct Params
@@ -31,11 +32,12 @@ struct Params
     uint snap_steps;
     uint num_blocks;
     bool snap;
-    uint max_partitions;
+    uint8_t max_partitions;
     bool debug_reconstruction;
     uint exact_steps;
     bool use_pca;
     uint seed;
+    bool no_quantization;
 };
 ConstantBuffer<Params> g_params;
 
@@ -293,6 +295,40 @@ vector<E, M> quantize<E:__BuiltinFloatingPointType, let M: int>(vector<E, M> val
     return round(value * scale) / scale;
 }
 
+static const vector<uint8_t, 2> VALID_1P_QUANTIZATION_RANGES[9] = {
+    // w, c
+    {31, 31},   // (5b, 5b)
+    {23, 63},   // (1t3b, 6b)
+    {19, 95},   // (1q2b, 1t5b)
+    {15, 191},  // (4b, 1t6b)
+    {11, 255},  // (1t2b, 8b)
+    {0, 0}, {0, 0}, {0, 0}, {0, 0}, // Padding
+};
+
+static const vector<uint8_t, 2> VALID_2P_QUANTIZATION_RANGES[9] = {
+    // w, c
+    {15, 5},   // (4b, 1t1b)
+    {11, 9},   // (1t2b, 1q1b)
+    {9, 11},   // (1q1b, 1t2b)
+    {7, 15},   // (3b, 4b)
+    {5, 23},   // (1t1b, 1t3b)
+    {4, 31},   // (1q, 5b)
+    {3, 39},   // (2b, 1q3b)
+    {2, 63},   // (1t, 6b)
+    {1, 95},   // (1b, 1t5b)
+};
+
+static const vector<uint8_t, 2> VALID_3P_QUANTIZATION_RANGES[9] = {
+    // w, c
+    {7, 5},    // (3b, 1t1b)
+    {5, 7},    // (1t1b, 3b)
+    {4, 9},    // (1q, 1q1b)
+    {3, 11},   // (2b, 1t2b)
+    {2, 15},   // (1t, 4b)
+    {1, 23},   // (1b, 1t3b)
+    {0, 0}, {0, 0}, {0, 0}, // Padding
+};
+
 // Frozen weights (to avoid generating expensive derivatives in the bkw pass)
 struct NonDifferentiableFP8Weights {
     uint8_t data[16];
@@ -300,6 +336,28 @@ struct NonDifferentiableFP8Weights {
     {
         get { return float(data[n]) / 255; }
         set { data[n] = uint8_t(round(saturate(newValue) * 255)); }
+    }
+
+
+    [mutating]
+    void quantize(uint8_t range = 255)
+    {
+        [unroll]
+        for (int i = 0; i < 16; i++)
+        {
+            this[i] = quantize(this[i], range);
+        }
+    }
+
+    float mean()
+    {
+        float sum = 0;
+        [unroll]
+        for (int i = 0; i < 16; i++)
+        {
+            sum += this[i];
+        }
+        return sum / 16;
     }
 }
 
@@ -328,7 +386,8 @@ struct CompressedTextureBlock : IDifferentiable
     no_diff uint8_t perm;
     no_diff uint8_t partition_count;
     no_diff uint8_t max_partitions;
-    no_diff uint16_t padding;
+    no_diff vector<uint8_t, 2> qwc;
+    no_diff vector<uint8_t, 2> fqwc;
 
 #define EP_PROPERTY(ep0, _ep0) \
     property float3 ep0 \
@@ -570,6 +629,66 @@ struct CompressedTextureBlock : IDifferentiable
         }
     }
 
+    vector<uint8_t, 2> fast_quantize(TextureBlock groundtruth)
+    {
+        // Statistical estimator for ideal color ep quantization
+        float A = ((max_partitions == 1) ? 111 : 99) / 16;
+        float B = 6 * max_partitions / 16;
+        var Delta = (dot(abs(ep1 - ep0), 1) + dot(abs(ep3 - ep2), 1) + dot(abs(ep5 - ep4), 1)) / 9 + 1e-6;
+        var K = 1 + 4 * weights.mean() / 3;
+        var Qc = pow(2, clamp((A + log2(K / (B * Delta))) / (1 + B), 1, 8)) - 1;
+
+        vector<uint8_t, 2> best_wc;
+        for (int i = 0; i < 9; i++)
+        {
+            vector<uint8_t, 2> wc = max_partitions == 1 
+                ? VALID_1P_QUANTIZATION_RANGES[i] 
+                : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
+            if (wc.y == 0) continue;
+            if (Qc < wc.y) break;
+            best_wc = wc;
+        }
+        return best_wc;
+    }
+
+    [mutating]
+    vector<uint8_t, 2> quantize(TextureBlock groundtruth)
+    {
+        float best_loss = 1000.0;
+        vector<uint8_t, 2> best_wc;
+        CompressedTextureBlock best_block;
+        for (int i = 0; i < 9; i++)
+        {
+            vector<uint8_t, 2> wc = max_partitions == 1 
+                ? VALID_1P_QUANTIZATION_RANGES[i] 
+                : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
+            if (wc.x == 0) continue;
+
+            // Make a copy of this block
+            var c = wc.y;
+            CompressedTextureBlock block = this;
+            block._ep0 = quantize(_ep0, c);
+            block._ep1 = quantize(_ep1, c);
+            block._ep2 = quantize(_ep2, c);
+            block._ep3 = quantize(_ep3, c);
+            block._ep4 = quantize(_ep4, c);
+            block._ep5 = quantize(_ep5, c);
+            block.weights.quantize(wc.x);
+
+            var loss = loss_3P(groundtruth, block);
+            if (loss < best_loss || i == 0)
+            {
+                best_loss = loss;
+                best_wc = wc;
+                best_block = block;
+            }
+        }
+        this = best_block;
+        this.qwc = best_wc;
+        this.fqwc = fast_quantize(groundtruth);
+        return best_wc;
+    }
+
     TextureBlock reconstruct()
     {
         if (g_params.debug_reconstruction) {
@@ -761,10 +880,16 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
             CompressedTextureBlock.Differential gradient = cb_pair.d;
             block.ep0 = saturate(block.ep0 - gradient._ep0 * lr);
             block.ep1 = saturate(block.ep1 - gradient._ep1 * lr);
-            block.ep2 = saturate(block.ep2 - gradient._ep2 * lr);
-            block.ep3 = saturate(block.ep3 - gradient._ep3 * lr);
-            block.ep4 = saturate(block.ep4 - gradient._ep4 * lr);
-            block.ep5 = saturate(block.ep5 - gradient._ep5 * lr);
+            if (block.max_partitions >= 2)
+            {
+                block.ep2 = saturate(block.ep2 - gradient._ep2 * lr);
+                block.ep3 = saturate(block.ep3 - gradient._ep3 * lr);
+            }
+            if (block.max_partitions >= 3)
+            {
+                block.ep4 = saturate(block.ep4 - gradient._ep4 * lr);
+                block.ep5 = saturate(block.ep5 - gradient._ep5 * lr);
+            }
         }
         // One-step solve the partition
         block.one_step_solve_partition(groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));
@@ -790,8 +915,13 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
             g_diagnostics[blockIdx].partition_count[iter] = p0 + p1 + p2;
         }
     }
-
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
+
+    if (!g_params.no_quantization)
+    {
+        g_diagnostics[blockIdx].final_unquantized_loss = loss_3P(groundtruth, block);
+        block.quantize(groundtruth);
+    }
     g_compressedBlock3P[blockIdx] = block;
     g_reconstructed[blockIdx] = block.reconstruct();
     g_diagnostics[blockIdx].partition_hamming_error = best_perm_distance_s3(block.ideal_partition_map, block.astc_partition_map, perm);

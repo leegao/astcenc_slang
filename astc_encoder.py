@@ -89,6 +89,7 @@ def main(args):
         ('partition_hamming_error_log', (np.uint32, 20)),
         ('ideal_partition_log', (np.uint32, 20)),
         ('partition_count', (np.uint32, 20)),
+        ('final_unquantized_loss', np.float32),
     ])
 
     comp_block_dtype_3P = np.dtype([
@@ -103,8 +104,9 @@ def main(args):
         ('perm', np.uint8),
         ('partition_count', np.uint8),
         ('max_partitions', np.uint8),
-        ('padding1', np.uint16),
-        ('padding2', np.uint8),
+        ('wc', (np.uint8, 2)),
+        ('fwc', (np.uint8, 2)),
+        ('padding', (np.uint8, 3)),
     ])
 
     params_dtype = np.dtype([
@@ -195,6 +197,7 @@ def main(args):
             "exact_steps": args.exact_steps,
             "use_pca": args.use_pca,
             "seed": args.seed,
+            "no_quantization": args.no_quantization,
         }
     }
 
@@ -231,7 +234,9 @@ def main(args):
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
     if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
+    unquantized_loss = diagnostics['final_unquantized_loss'].mean()
     final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()
+    print(f"Final Mean L^2 Unquantized Loss per block: {unquantized_loss:.4f}")
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
 
     # for i in range(len(diagnostics['ideal_partition_log'])):
@@ -240,6 +245,10 @@ def main(args):
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['ideal_partition_map'])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
+    wc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
+    fwc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
+    if not args.no_quantization:
+        print(f"Mean predicted vs best color quantization method error: {(((np.log2(wc.T[1]) - np.log2(fwc.T[1])) ** 2) ** 0.5).mean():0.3} bits")
 
     reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)
@@ -259,6 +268,7 @@ if __name__ == "__main__":
     parser.add_argument("--exact_steps", type=int, default=0, help="Number of exact steps to run")
     parser.add_argument("--use_pca", action="store_true", help="Use PCA instead of AABB")
     parser.add_argument("--seed", type=int, default=0, help="Use PRNG seed (default 0)")
+    parser.add_argument("--no_quantization", action="store_true", help="Don't quantize the image to a valid astc mode")
 
 
     args = parser.parse_args()
