@@ -247,11 +247,13 @@ def main(args):
     if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
     unquantized_loss = diagnostics['final_unquantized_loss'].mean(0)
+    # final loss is the sum of 16 pixels' MSEs (of 3 components each - RGB)
     final_loss = loss_buffer.to_numpy().view(np.float32).mean(0)
     print(f"Final Mean L^2 Unquantized Loss per block: {unquantized_loss:.4f}")
     if (args.ensemble):
         print(f"  Ensemble 1P: {loss_log[-1][0]:.4f}, 2P: {loss_log[-1][1]:.4f}, 3P: {loss_log[-1][2]:.4f}, Best: {best_loss[-1]:.4f}")
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
+    print(f"Final PSNR: {10 * np.log10(1 / (final_loss / 16 / 3)):.4f} dB")
 
     # for i in range(len(diagnostics['ideal_partition_log'])):
     #     print(i, diagnostics['ideal_partition_log'][i][19])
