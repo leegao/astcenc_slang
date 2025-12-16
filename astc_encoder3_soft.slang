@@ -23,6 +23,12 @@ struct Diagnostics
     uint ideal_partition_log[20];
     uint partition_count[20];
     float final_unquantized_loss;
+    float3 delta1[20];
+    float3 delta2[20];
+    float3 delta3[20];
+    float3 color_mean1[20];
+    float3 color_mean2[20];
+    float3 color_mean3[20];
 };
 
 struct Params
@@ -34,6 +40,8 @@ struct Params
     bool snap;
     uint8_t max_partitions;
     bool debug_reconstruction;
+    bool debug_quant;
+    bool debug_loss;
     uint exact_steps;
     bool use_pca;
     uint seed;
@@ -143,14 +151,22 @@ uint permute_cycle_201(uint x)
     return permute_cycle_120(permute_cycle_120(x));
 }
 
-uint apply_permutation(Permutation perm, uint x) {
-    switch (perm) {
-    case Id: return x;
-    case Swap01: return permute_swap01(x);
-    case Swap02: return permute_swap02(x);
-    case Swap12: return permute_swap12(x);
-    case Cycle120: return permute_cycle_120(x);
-    case Cycle201: return permute_cycle_201(x);
+uint apply_permutation(Permutation perm, uint x)
+{
+    switch (perm)
+    {
+    case Id:
+        return x;
+    case Swap01:
+        return permute_swap01(x);
+    case Swap02:
+        return permute_swap02(x);
+    case Swap12:
+        return permute_swap12(x);
+    case Cycle120:
+        return permute_cycle_120(x);
+    case Cycle201:
+        return permute_cycle_201(x);
     }
     return x;
 }
@@ -165,17 +181,17 @@ uint best_perm_distance_s3(uint x, uint y, out Permutation perm)
     uint x_shr1 = x >> 1;
     uint nz = (x | x_shr1) & M5;
     uint nz_shl1 = nz << 1;
-    
+
     uint m01 = (~x_shr1) & M5;
     uint m02 = (~(x << 1)) & MA;
     uint m12 = nz | nz_shl1;
     uint m_cp = m01 | nz_shl1;
     uint m_cm = nz | ((not_x & M5) << 1);
 
-    uint p0 = (count_diffs(base)        << 3) | 0;
-    uint p1 = (count_diffs(base ^ m01)  << 3) | 1;
-    uint p2 = (count_diffs(base ^ m02)  << 3) | 2;
-    uint p3 = (count_diffs(base ^ m12)  << 3) | 3;
+    uint p0 = (count_diffs(base) << 3) | 0;
+    uint p1 = (count_diffs(base ^ m01) << 3) | 1;
+    uint p2 = (count_diffs(base ^ m02) << 3) | 2;
+    uint p3 = (count_diffs(base ^ m12) << 3) | 3;
     uint p4 = (count_diffs(base ^ m_cp) << 3) | 4;
     uint p5 = (count_diffs(base ^ m_cm) << 3) | 5;
 
@@ -192,11 +208,11 @@ uint best_perm_distance_s2(uint x, uint y, out Permutation perm)
 {
     uint base = x ^ y;
     uint x_shr1 = x >> 1;
-    
+
     uint m01 = (~x_shr1) & M5;
 
-    uint p0 = (count_diffs(base)        << 1) | 0;
-    uint p1 = (count_diffs(base ^ m01)  << 1) | 1;
+    uint p0 = (count_diffs(base) << 1) | 0;
+    uint p1 = (count_diffs(base ^ m01) << 1) | 1;
 
     uint min01 = min(p0, p1);
 
@@ -211,7 +227,7 @@ uint lut3_key(uint x)
     [unroll]
     for (int i = 15; i >= 0; i--)
     {
-        result = result * 3 + ((x >> (i*2)) & 3);
+        result = result * 3 + ((x >> (i * 2)) & 3);
     }
     return result;
 }
@@ -238,7 +254,7 @@ uint lut2_key(uint x)
     [unroll]
     for (int i = 15; i >= 0; i--)
     {
-        result = result * 2 + ((x >> (i*2)) & 3);
+        result = result * 2 + ((x >> (i * 2)) & 3);
     }
     return result;
 }
@@ -263,7 +279,8 @@ uint count_diffs(uint val)
     return countbits((val | (val >> 1)) & 0x55555555);
 }
 
-uint get_closest_seed3(uint input, out Permutation perm, out uint final_pattern) {
+uint get_closest_seed3(uint input, out Permutation perm, out uint final_pattern)
+{
     uint key = canonicalize_lut3(input);
     uint seed = (g_astc_3p_4x4_lut_s3[key / 3] >> ((key % 3) * 10)) & 0x3FF;
     uint pattern = LUT3_LOOKUP[seed];
@@ -273,7 +290,8 @@ uint get_closest_seed3(uint input, out Permutation perm, out uint final_pattern)
     return seed;
 }
 
-uint get_closest_seed2(uint input, out Permutation permutation, out uint final_pattern) {
+uint get_closest_seed2(uint input, out Permutation permutation, out uint final_pattern)
+{
     uint key = canonicalize_lut2(input);
     uint seed = (g_astc_2p_4x4_lut_s2[key / 3] >> ((key % 3) * 10)) & 0x3FF;
     uint pattern = LUT2_LOOKUP[seed];
@@ -283,13 +301,13 @@ uint get_closest_seed2(uint input, out Permutation permutation, out uint final_p
     return seed;
 }
 
-T quantize<T:__BuiltinFloatingPointType>(T value, uint range = 255)
+T quantize<T : __BuiltinFloatingPointType>(T value, uint range = 255)
 {
     T scale = T(range);
     return round(value * scale) / scale;
 }
 
-vector<E, M> quantize<E:__BuiltinFloatingPointType, let M: int>(vector<E, M> value, uint range = 255) 
+vector<E, M> quantize<E : __BuiltinFloatingPointType, let M : int>(vector<E, M> value, uint range = 255)
 {
     vector<E, M> scale = vector<E, M>(E(range));
     return round(value * scale) / scale;
@@ -297,47 +315,58 @@ vector<E, M> quantize<E:__BuiltinFloatingPointType, let M: int>(vector<E, M> val
 
 static const vector<uint8_t, 2> VALID_1P_QUANTIZATION_RANGES[9] = {
     // w, c
-    {31, 31},   // (5b, 5b)
-    {23, 63},   // (1t3b, 6b)
-    {19, 95},   // (1q2b, 1t5b)
-    {15, 191},  // (4b, 1t6b)
-    {11, 255},  // (1t2b, 8b)
-    {0, 0}, {0, 0}, {0, 0}, {0, 0}, // Padding
+    { 31, 31 },  // (5b, 5b)
+    { 23, 63 },  // (1t3b, 6b)
+    { 19, 95 },  // (1q2b, 1t5b)
+    { 15, 191 }, // (4b, 1t6b)
+    { 11, 255 }, // (1t2b, 8b)
+    { 0, 0 },
+    { 0, 0 },
+    { 0, 0 },
+    { 0, 0 }, // Padding
 };
 
 static const vector<uint8_t, 2> VALID_2P_QUANTIZATION_RANGES[9] = {
     // w, c
-    {15, 5},   // (4b, 1t1b)
-    {11, 9},   // (1t2b, 1q1b)
-    {9, 11},   // (1q1b, 1t2b)
-    {7, 15},   // (3b, 4b)
-    {5, 23},   // (1t1b, 1t3b)
-    {4, 31},   // (1q, 5b)
-    {3, 39},   // (2b, 1q3b)
-    {2, 63},   // (1t, 6b)
-    {1, 95},   // (1b, 1t5b)
+    { 15, 5 }, // (4b, 1t1b)
+    { 11, 9 }, // (1t2b, 1q1b)
+    { 9, 11 }, // (1q1b, 1t2b)
+    { 7, 15 }, // (3b, 4b)
+    { 5, 23 }, // (1t1b, 1t3b)
+    { 4, 31 }, // (1q, 5b)
+    { 3, 39 }, // (2b, 1q3b)
+    { 2, 63 }, // (1t, 6b)
+    { 1, 95 }, // (1b, 1t5b)
 };
 
 static const vector<uint8_t, 2> VALID_3P_QUANTIZATION_RANGES[9] = {
     // w, c
-    {7, 5},    // (3b, 1t1b)
-    {5, 7},    // (1t1b, 3b)
-    {4, 9},    // (1q, 1q1b)
-    {3, 11},   // (2b, 1t2b)
-    {2, 15},   // (1t, 4b)
-    {1, 23},   // (1b, 1t3b)
-    {0, 0}, {0, 0}, {0, 0}, // Padding
+    { 7, 5 },  // (3b, 1t1b)
+    { 5, 7 },  // (1t1b, 3b)
+    { 4, 9 },  // (1q, 1q1b)
+    { 3, 11 }, // (2b, 1t2b)
+    { 2, 15 }, // (1t, 4b)
+    { 1, 23 }, // (1b, 1t3b)
+    { 0, 0 },
+    { 0, 0 },
+    { 0, 0 }, // Padding
 };
 
 // Frozen weights (to avoid generating expensive derivatives in the bkw pass)
-struct NonDifferentiableFP8Weights {
+struct NonDifferentiableFP8Weights
+{
     uint8_t data[16];
-    __subscript(int n) -> float
+    __subscript(int n)->float
     {
-        get { return float(data[n]) / 255; }
-        set { data[n] = uint8_t(round(saturate(newValue) * 255)); }
+        get
+        {
+            return float(data[n]) / 255;
+        }
+        set
+        {
+            data[n] = uint8_t(round(saturate(newValue) * 255));
+        }
     }
-
 
     [mutating]
     void quantize(uint8_t range = 255)
@@ -361,12 +390,19 @@ struct NonDifferentiableFP8Weights {
     }
 }
 
-struct NonDifferentiableIntPartitions {
+struct NonDifferentiableIntPartitions
+{
     int8_t data[16];
-    __subscript(int n) -> int
+    __subscript(int n)->int
     {
-        get { return data[n]; }
-        set { data[n] = int8_t(newValue); }
+        get
+        {
+            return data[n];
+        }
+        set
+        {
+            data[n] = int8_t(newValue);
+        }
     }
 }
 
@@ -377,10 +413,10 @@ struct CompressedTextureBlock : IDifferentiable
     half3 _ep0, _ep1; // partition 1
     half3 _ep2, _ep3; // partition 2
     half3 _ep4, _ep5; // partition 2
-    
-    no_diff NonDifferentiableFP8Weights weights; // we don't have to gradient descent on this since we can do a full solve
+
+    no_diff NonDifferentiableFP8Weights weights;            // we don't have to gradient descent on this since we can do a full solve
     no_diff NonDifferentiableIntPartitions partition_index; // Partition blend logits
-    no_diff uint astc_partition_map; // Final 16-bit valid partition map
+    no_diff uint astc_partition_map;                        // Final 16-bit valid partition map
     no_diff uint ideal_partition_map;
     no_diff uint16_t astc_seed;
     no_diff uint8_t perm;
@@ -389,12 +425,18 @@ struct CompressedTextureBlock : IDifferentiable
     no_diff vector<uint8_t, 2> qwc;
     no_diff vector<uint8_t, 2> fqwc;
 
-#define EP_PROPERTY(ep0, _ep0) \
-    property float3 ep0 \
-    { \
-        [Differentiable] \
-        get { return _ep0; } \
-        set { _ep0 = quantize(half3(newValue), 255); } \
+#define EP_PROPERTY(ep0, _ep0)                     \
+    property float3 ep0                            \
+    {                                              \
+        [Differentiable]                           \
+        get                                        \
+        {                                          \
+            return _ep0;                           \
+        }                                          \
+        set                                        \
+        {                                          \
+            _ep0 = quantize(half3(newValue), 255); \
+        }                                          \
     }
 
     EP_PROPERTY(ep0, _ep0)
@@ -435,7 +477,7 @@ struct CompressedTextureBlock : IDifferentiable
         // Destination (ep2, ep3)
         // From Pair 0 (Swap01, Cycle120) or Pair 2 (Swap12, Cycle201)
         bool from_pair0 = (perm == Swap01 || perm == Cycle120);
-        from_pair2      = (perm == Swap12 || perm == Cycle201);
+        from_pair2 = (perm == Swap12 || perm == Cycle201);
         ep2 = from_pair0 ? old_ep0 : (from_pair2 ? old_ep4 : old_ep2);
         ep3 = from_pair0 ? old_ep1 : (from_pair2 ? old_ep5 : old_ep3);
 
@@ -464,11 +506,13 @@ struct CompressedTextureBlock : IDifferentiable
         if (max_partitions == 3)
         {
             closest_seed = get_closest_seed3(raw_map, permutation, final_mask);
-        } else {
+        }
+        else
+        {
             closest_seed = get_closest_seed2(raw_map, permutation, final_mask);
         }
 
-        astc_seed = closest_seed;
+        astc_seed = uint16_t(closest_seed);
         astc_partition_map = final_mask;
         ideal_partition_map = raw_map;
         perm = permutation;
@@ -489,15 +533,18 @@ struct CompressedTextureBlock : IDifferentiable
 
     static uint argmin(float d1, float d2, float d3)
     {
-        if (d1 < d2 && d1 < d3) return 0;
-        if (d2 < d3) return 1;
-        return 2; 
+        if (d1 < d2 && d1 < d3)
+            return 0;
+        if (d2 < d3)
+            return 1;
+        return 2;
     }
 
     // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
     // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
     [mutating]
-    void solve_weights(TextureBlock groundtruth) {
+    void solve_weights(TextureBlock groundtruth)
+    {
         // Project weights again
         var L1 = ep1 - ep0;
         var L2 = ep3 - ep2;
@@ -509,7 +556,7 @@ struct CompressedTextureBlock : IDifferentiable
         {
             var C = groundtruth.pixels[i];
             var p = partition_index[i];
-            var pDotL    = p == 0 ? dot(C - ep0, L1) : (p == 1 ? dot(C - ep2, L2) : dot(C - ep4, L3));
+            var pDotL = p == 0 ? dot(C - ep0, L1) : (p == 1 ? dot(C - ep2, L2) : dot(C - ep4, L3));
             var invLenSq = p == 0 ? invLenSq1 : (p == 1 ? invLenSq2 : invLenSq3);
             var w = pDotL * invLenSq;
             weights[i] = saturate(w);
@@ -517,7 +564,8 @@ struct CompressedTextureBlock : IDifferentiable
     }
 
     [mutating]
-    uint solve_partition(TextureBlock groundtruth) {
+    uint solve_partition(TextureBlock groundtruth)
+    {
         var L1 = ep1 - ep0;
         var L2 = ep3 - ep2;
         var L3 = ep5 - ep4;
@@ -542,7 +590,7 @@ struct CompressedTextureBlock : IDifferentiable
             partitions |= (1 << p);
 
             // Project the weights since it's pretty much free
-            var pDotL    = p == 0 ? pDotL1 : (p == 1 ? pDotL2 : pDotL3);
+            var pDotL = p == 0 ? pDotL1 : (p == 1 ? pDotL2 : pDotL3);
             var invLenSq = p == 0 ? invLenSq1 : (p == 1 ? invLenSq2 : invLenSq3);
             var w = pDotL * invLenSq;
             weights[i] = saturate(w);
@@ -551,8 +599,10 @@ struct CompressedTextureBlock : IDifferentiable
     }
 
     [mutating]
-    void one_step_solve_partition(TextureBlock groundtruth, bool should_snap) {
-        if (max_partitions == 1) {
+    void one_step_solve_partition(TextureBlock groundtruth, bool should_snap)
+    {
+        if (max_partitions == 1)
+        {
             solve_weights(groundtruth);
             return;
         }
@@ -561,7 +611,8 @@ struct CompressedTextureBlock : IDifferentiable
         // "Scramble" any blocks that settle onto the single-partition basin
         // This is our poor man's gradient restart :)
         bool single_partition = max_partitions > 1 && (partitions == 1 || partitions == 2 || partitions == 4);
-        if (should_snap || single_partition) {
+        if (should_snap || single_partition)
+        {
             snap();
             // Project weights again
             solve_weights(groundtruth);
@@ -590,40 +641,52 @@ struct CompressedTextureBlock : IDifferentiable
         int i;
         ep0 = groundtruth.pixels[prng.nextUint() % 16];
         ep1 = groundtruth.pixels[prng.nextUint() % 16];
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 8; i++)
+        {
             ep1 = groundtruth.pixels[prng.nextUint() % 16];
             var d = ep1 - ep0;
-            if (dot(d, d) > 0.3) {
+            if (dot(d, d) > 0.3)
+            {
                 break;
             }
         }
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 8; i++)
+        {
             ep2 = groundtruth.pixels[prng.nextUint() % 16];
-            if (dist(ep2, ep0, ep1) > 0.3) {
+            if (dist(ep2, ep0, ep1) > 0.3)
+            {
                 break;
             }
         }
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 8; i++)
+        {
             ep3 = groundtruth.pixels[prng.nextUint() % 16];
-            if (dist(ep3, ep0, ep1) > 0.3) {
+            if (dist(ep3, ep0, ep1) > 0.3)
+            {
                 break;
             }
         }
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 8; i++)
+        {
             ep4 = groundtruth.pixels[prng.nextUint() % 16];
-            if (dist(ep4, ep0, ep1) <= 0.3) {
+            if (dist(ep4, ep0, ep1) <= 0.3)
+            {
                 continue;
             }
-            if (dist(ep4, ep2, ep3) > 0.3) {
+            if (dist(ep4, ep2, ep3) > 0.3)
+            {
                 break;
             }
         }
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < 8; i++)
+        {
             ep5 = groundtruth.pixels[prng.nextUint() % 16];
-            if (dist(ep5, ep0, ep1) <= 0.3) {
+            if (dist(ep5, ep0, ep1) <= 0.3)
+            {
                 continue;
             }
-            if (dist(ep5, ep2, ep3) > 0.3) {
+            if (dist(ep5, ep2, ep3) > 0.3)
+            {
                 break;
             }
         }
@@ -641,11 +704,13 @@ struct CompressedTextureBlock : IDifferentiable
         vector<uint8_t, 2> best_wc;
         for (int i = 0; i < 9; i++)
         {
-            vector<uint8_t, 2> wc = max_partitions == 1 
-                ? VALID_1P_QUANTIZATION_RANGES[i] 
-                : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
-            if (wc.y == 0) continue;
-            if (Qc < wc.y) break;
+            vector<uint8_t, 2> wc = max_partitions == 1
+                                        ? VALID_1P_QUANTIZATION_RANGES[i]
+                                        : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
+            if (wc.y == 0)
+                continue;
+            if (Qc < wc.y)
+                break;
             best_wc = wc;
         }
         return best_wc;
@@ -659,10 +724,11 @@ struct CompressedTextureBlock : IDifferentiable
         CompressedTextureBlock best_block;
         for (int i = 0; i < 9; i++)
         {
-            vector<uint8_t, 2> wc = max_partitions == 1 
-                ? VALID_1P_QUANTIZATION_RANGES[i] 
-                : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
-            if (wc.x == 0) continue;
+            vector<uint8_t, 2> wc = max_partitions == 1
+                                        ? VALID_1P_QUANTIZATION_RANGES[i]
+                                        : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
+            if (wc.x == 0)
+                continue;
 
             // Make a copy of this block
             var c = wc.y;
@@ -689,9 +755,10 @@ struct CompressedTextureBlock : IDifferentiable
         return best_wc;
     }
 
-    TextureBlock reconstruct()
+    TextureBlock reconstruct(TextureBlock groundtruth)
     {
-        if (g_params.debug_reconstruction) {
+        if (g_params.debug_reconstruction)
+        {
             TextureBlock outputBlock;
             for (int i = 0; i < 16; i++)
             {
@@ -699,7 +766,88 @@ struct CompressedTextureBlock : IDifferentiable
                 int partition = clamp(int(detach(partition_index[i])), 0, 2);
                 float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
                 float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
-                float3 c = partition == 0 ? float3(1,1,1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0,0,0));
+                float3 c = partition == 0 ? float3(1, 1, 1) : (partition == 1 ? float3(0.5, 0.5, 0.5) : float3(0, 0, 0));
+                outputBlock.pixels[i] = c; // lerp(e0, e1, w);
+            }
+            return outputBlock;
+        }
+        if (g_params.debug_loss)
+        {
+            TextureBlock outputBlock;
+            for (int i = 0; i < 16; i++)
+            {
+                float w = weights[i];
+                int partition = clamp(int(partition_index[i]), 0, 2);
+                float3 e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
+                float3 e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
+                float3 c = lerp(e0, e1, w);
+                outputBlock.pixels[i] = abs(groundtruth.pixels[i] - c);
+            }
+            return outputBlock;
+        }
+        if (g_params.debug_quant)
+        {
+            TextureBlock outputBlock;
+            for (int i = 0; i < 16; i++)
+            {
+                // R - 5,7,9 / 0, 0.5, 0.85
+                // B - 11,15,23 / 1.14, 1.6, 2.2
+                // G - 31,33,39 / 2.6, 2.7, 2.96
+                // M - 63,95,191,255 / 3.65, 4.25, 5.25, 5.67
+                // 3P - [5,7,9,11,15,23] - R to B
+                // 2P - [5,9,11,15,23,31,39,63,95] R - M
+                // 1P - [31,63,95,191,255] - G - M
+                let R = float3(1, 0, 0);
+                let G = float3(0, 1, 0);
+                let B = float3(0, 0, 1);
+                let M = float3(1, 0, 1);
+                float3 c = 0;
+                switch (qwc.y)
+                {
+                case 5:
+                    c = R * 0.33;
+                    break;
+                case 7:
+                    c = R * 0.67;
+                    break;
+                case 9:
+                    c = R;
+                    break;
+
+                case 11:
+                    c = B * 0.33;
+                    break;
+                case 15:
+                    c = B * 0.50;
+                    break;
+                case 23:
+                    c = B;
+                    break;
+
+                case 31:
+                    c = G * 0.33;
+                    break;
+                case 33:
+                    c = G * 0.50;
+                    break;
+                case 39:
+                    c = G;
+                    break;
+
+                case 63:
+                    c = M * 0.33;
+                    break;
+                case 95:
+                    c = M * 0.67;
+                    break;
+                case 191:
+                    c = M * 0.9;
+                    break;
+                case 255:
+                    c = M;
+                    break;
+                }
+
                 outputBlock.pixels[i] = c; // lerp(e0, e1, w);
             }
             return outputBlock;
@@ -708,13 +856,72 @@ struct CompressedTextureBlock : IDifferentiable
     }
 };
 
-// Potentially use this vs solve_aabb_for_partition
-uint solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
+// Prevent line collapse by ensuring that all bound color lines are spread far apart
+void bound_and_damp(float3 x, float3 y, inout float3 x_out, inout float3 y_out, float lr)
 {
-    float3 axis = float3(0.17, 0.83, 0.38); 
+    let x_old = x_out;
+    let y_old = y_out;
+
+    float3 boxMin = float3(0.0, 0.0, 0.0);
+    float3 boxMax = float3(1.0, 1.0, 1.0);
+
+    bool xInside = all(x >= boxMin) && all(x <= boxMax);
+    bool yInside = all(y >= boxMin) && all(y <= boxMax);
+
+    float3 d = y - x;
+    float distSq = dot(d, d);
+    bool shouldClip = (!xInside || !yInside) || (distSq < 0.01);
+
+    var new_x = x;
+    var new_y = y;
+
+    if (shouldClip)
+    {
+        float3 invDir = 1.0 / (d + 1e-6);
+        float3 t0 = (boxMin - x) * invDir;
+        float3 t1 = (boxMax - x) * invDir;
+        float3 tSmall = min(t0, t1);
+        float3 tBig = max(t0, t1);
+        float tEnter = max(max(tSmall.x, tSmall.y), tSmall.z);
+        float tExit = min(min(tBig.x, tBig.y), tBig.z);
+        float tNewStart = max(tEnter, 0.0);
+        float tNewEnd = min(tExit, 1.0);
+
+        new_x = saturate(x + d * tNewStart);
+        new_y = saturate(x + d * tNewEnd);
+    }
+
+    x_out = lerp(x_old, new_x, lr);
+    y_out = lerp(y_old, new_y, lr);
+}
+
+float3 sample_color(float3 centroid, TextureBlock groundtruth)
+{
+    // find a pixel in groundtruth that is furthest from the centroid
+    float max_dist = 0;
+    int max_idx = 0;
+    [unroll]
+    for (int i = 0; i < 16; i++)
+    {
+        float dist = length(groundtruth.pixels[i] - centroid);
+        if (dist > max_dist)
+        {
+            max_dist = dist;
+            max_idx = i;
+        }
+    }
+    return groundtruth.pixels[max_idx];
+}
+
+// Potentially use this vs solve_aabb_for_partition
+bool solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id, float lr = 1)
+{
+    let old_ep1 : float3 = ep1;
+    let old_ep0 : float3 = ep0;
+    float3 axis = float3(0.17, 0.83, 0.38);
     float3 centroid = float3(0);
     uint count = 0;
-    
+
     [unroll]
     for (int i = 0; i < 16; i++)
     {
@@ -724,48 +931,66 @@ uint solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 
             count += 1;
         }
     }
-
-    if (count <= 1) {
-        ep0 = saturate(count > 0 ? centroid / count : float3(0));
-        ep1 = ep0;
-        return uint(count);
-    }
-    
     centroid /= count;
-    float xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
-    
+
+    if (count == 0)
+        return true;
+
+    if (count == 1)
+    {
+        let new_ep0 = centroid;
+        let new_ep1 = sample_color(centroid, groundtruth);
+        bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
+        return true;
+    }
+
+    float3x3 C = (float3x3)0;
     [unroll]
     for (int i = 0; i < 16; i++)
     {
         if (int(block.partition_index[i]) == partition_id)
         {
             float3 d = groundtruth.pixels[i] - centroid;
-            xx += d.x * d.x;
-            xy += d.x * d.y;
-            xz += d.x * d.z;
-            yy += d.y * d.y;
-            yz += d.y * d.z;
-            zz += d.z * d.z;
+            C[0] += d.x * d; // Row 0: [xx, xy, xz]
+            C[1] += d.y * d; // Row 1: [yx, yy, yz]
+            C[2] += d.z * d; // Row 2: [zx, zy, zz]
+        }
+    }
+    C /= count;
+
+    // Check for degenerate cases of single color (low trace of C)
+    float trace = C[0].x + C[1].y + C[2].z;
+    if (trace < 3e-4)
+    {
+        // In this specific case, we need to push the pattern away from a single solid color
+        // Gradient descent is great at this, but it's very slow
+        let new_ep0 = centroid;
+        let new_ep1 = sample_color(centroid, groundtruth);
+        bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
+        return false;
+    }
+
+    axis = float3(0.17, 0.83, 0.38);
+    [unroll]
+    for (int iter = 0; iter < 4; iter++)
+    {
+        axis = mul(C, axis);
+        float lenSq = dot(axis, axis);
+        if (lenSq > 1e-8)
+        {
+            axis *= rsqrt(lenSq);
         }
     }
 
-    // Power iterations
-    [unroll]
-    for(int iter = 0; iter < 4; iter++)
+    // The data is isotropic (C ~ I), so any direction passing through the centroid is valid
+    if (dot(axis, axis) < 1e-8)
     {
-        float3 new_axis;
-        new_axis.x = xx * axis.x + xy * axis.y + xz * axis.z;
-        new_axis.y = xy * axis.x + yy * axis.y + yz * axis.z;
-        new_axis.z = xz * axis.x + yz * axis.y + zz * axis.z;
-        axis = new_axis;
+        let new_ep0 = centroid;
+        let new_ep1 = sample_color(centroid, groundtruth);
+        bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
+        return false;
     }
 
-    if (dot(axis, axis) < 1e-8) {
-        ep0 = saturate(centroid);
-        ep1 = saturate(centroid);
-        return count;
-    }
-    
     axis = normalize(axis);
     float min_t = 1000.0;
     float max_t = -1000.0;
@@ -782,9 +1007,10 @@ uint solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 
         }
     }
 
-    ep0 = saturate(centroid + axis * min_t);
-    ep1 = saturate(centroid + axis * max_t);
-    return count;
+    let new_ep0 = (centroid + axis * (min_t));
+    let new_ep1 = (centroid + axis * (max_t));
+    bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
+    return true;
 }
 
 void solve_aabb_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
@@ -810,13 +1036,13 @@ float loss_3P(
 {
     TextureBlock reconstructed = compressed.decompress3P();
     float totalError = 0.0f;
-    
+
     for (int i = 0; i < 16; i++)
     {
         var diff = reconstructed.pixels[i] - groundtruth.pixels[i];
         totalError += dot(diff, diff); // L2 error
     }
-    
+
     return totalError;
 }
 
@@ -830,10 +1056,11 @@ float dist(float3 x, float3 ep0, float3 ep1)
 // [require(spvShaderClockKHR)]
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupThreadId : SV_GroupThreadID)
+void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupThreadId: SV_GroupThreadID)
 {
     uint blockIdx = dispatchThreadID.x;
-    if (blockIdx >= g_params.num_blocks) return;
+    if (blockIdx >= g_params.num_blocks)
+        return;
     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
     Permutation perm = Id;
@@ -849,7 +1076,8 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     var prng = PCG32(g_params.seed);
     block.max_partitions = g_params.max_partitions;
     block.random_initialize(groundtruth, prng);
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 16; i++)
+    {
         block.weights[i] = prng.nextFloat();
         block.partition_index[i] = prng.nextUint() % block.max_partitions;
     }
@@ -859,22 +1087,28 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
     {
         // Coordinate descent: gradient optimize ep, one-step solve partition
         bool should_use_lsq = exact_steps > 0 && (step >= first_lsq_step) && (step <= first_lsq_step + exact_steps);
-        if (should_use_lsq) {
+        if (should_use_lsq)
+        {
             // "Exact" approximate solve_pca_eps vs solve_aabb_eps
             // Note that the exact solves tend to get stuck in local optimums that even the gradient
             // optimizer can't climb out of. In some problems, reaches the local optimum faster
-            if (g_params.use_pca) {
+            if (g_params.use_pca)
+            {
                 solve_pca_eps(block, block.ep0, block.ep1, groundtruth, 0);
                 solve_pca_eps(block, block.ep2, block.ep3, groundtruth, 1);
                 solve_pca_eps(block, block.ep4, block.ep5, groundtruth, 2);
-            } else {
+            }
+            else
+            {
                 solve_aabb_eps(block, block.ep0, block.ep1, groundtruth, 0);
                 solve_aabb_eps(block, block.ep2, block.ep3, groundtruth, 1);
                 solve_aabb_eps(block, block.ep4, block.ep5, groundtruth, 2);
             }
-        } else {
+        }
+        else
+        {
             // Backprop on the color eps
-            // Generally reaches the optimum ~ same 
+            // Generally reaches the optimum ~ same
             DifferentialPair<CompressedTextureBlock> cb_pair = diffPair(block);
             bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
             CompressedTextureBlock.Differential gradient = cb_pair.d;
@@ -894,7 +1128,8 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
         // One-step solve the partition
         block.one_step_solve_partition(groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));
 
-        if (step % checkpoint == 0) {
+        if (step % checkpoint == 0)
+        {
             uint iter = step / checkpoint;
             g_diagnostics[blockIdx].timestamps[iter] = getRealtimeClock();
             g_diagnostics[blockIdx].loss_log[iter] = loss_3P(groundtruth, block);
@@ -902,17 +1137,24 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
             uint pattern = block.pack_partition_indices();
             uint final_mask = 0;
             uint2 closest_seed = block.max_partitions == 3
-                ? get_closest_seed3(pattern, perm, final_mask)
-                : get_closest_seed2(pattern, perm, final_mask);
-            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = block.max_partitions == 3 
-                ? best_perm_distance_s3(pattern, final_mask, perm) 
-                : best_perm_distance_s2(pattern, final_mask, perm);
+                                     ? get_closest_seed3(pattern, perm, final_mask)
+                                     : get_closest_seed2(pattern, perm, final_mask);
+            g_diagnostics[blockIdx].partition_hamming_error_log[iter] = block.max_partitions == 3
+                                                                            ? best_perm_distance_s3(pattern, final_mask, perm)
+                                                                            : best_perm_distance_s2(pattern, final_mask, perm);
             g_diagnostics[blockIdx].ideal_partition_log[iter] = pattern;
 
             uint p0 = hamming_distance_2b(pattern, 0) < 16;
             uint p1 = hamming_distance_2b(pattern, 0x55555555) < 16;
             uint p2 = hamming_distance_2b(pattern, 0xaaaaaaaa) < 16;
             g_diagnostics[blockIdx].partition_count[iter] = p0 + p1 + p2;
+
+            g_diagnostics[blockIdx].delta1[iter] = (block.ep1 - block.ep0);
+            g_diagnostics[blockIdx].delta2[iter] = (block.ep3 - block.ep2);
+            g_diagnostics[blockIdx].delta3[iter] = (block.ep5 - block.ep4);
+            g_diagnostics[blockIdx].color_mean1[iter] = block.ep0;
+            g_diagnostics[blockIdx].color_mean2[iter] = block.ep2;
+            g_diagnostics[blockIdx].color_mean3[iter] = block.ep4;
         }
     }
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
@@ -923,7 +1165,7 @@ void compress_3P_step(uint3 dispatchThreadID : SV_DispatchThreadID, uint3 groupT
         block.quantize(groundtruth);
     }
     g_compressedBlock3P[blockIdx] = block;
-    g_reconstructed[blockIdx] = block.reconstruct();
+    g_reconstructed[blockIdx] = block.reconstruct(groundtruth);
     g_diagnostics[blockIdx].partition_hamming_error = best_perm_distance_s3(block.ideal_partition_map, block.astc_partition_map, perm);
     g_final_loss[blockIdx] = loss_3P(groundtruth, block);
     g_diagnostics[blockIdx].finished_clock = getRealtimeClock();

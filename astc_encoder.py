@@ -5,6 +5,7 @@ from pathlib import Path
 import argparse
 import imageio.v2 as imageio
 from PIL import Image
+import collections
 
 Image.MAX_IMAGE_PIXELS = None 
 
@@ -90,6 +91,12 @@ def main(args):
         ('ideal_partition_log', (np.uint32, 20)),
         ('partition_count', (np.uint32, 20)),
         ('final_unquantized_loss', np.float32),
+        ('delta1', (np.float32, (3, 20))),
+        ('delta2', (np.float32, (3, 20))),
+        ('delta3', (np.float32, (3, 20))),
+        ('color_mean1', (np.float32, (3, 20))),
+        ('color_mean2', (np.float32, (3, 20))),
+        ('color_mean3', (np.float32, (3, 20))),
     ])
 
     comp_block_dtype_3P = np.dtype([
@@ -127,16 +134,16 @@ def main(args):
     )
 
     initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
-    initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['ep1'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['ep2'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['ep3'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['ep4'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['ep5'] = np.random.rand(num_blocks, 3)
-    initial_params_3p_struct['weights'] = np.random.rand(num_blocks, 16)
-    initial_params_3p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) * 2) # Center around 1
+    # initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['ep1'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['ep2'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['ep3'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['ep4'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['ep5'] = np.random.rand(num_blocks, 3)
+    # initial_params_3p_struct['weights'] = np.random.rand(num_blocks, 16)
+    # initial_params_3p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) * 2) # Center around 1
     compressed_3P_buffer = device.create_buffer(
-        element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_compressedBlock3P,
+        element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock3P,
         usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.uint8)
     )
 
@@ -151,20 +158,20 @@ def main(args):
     )
 
     final_diagnostics_buffer = device.create_buffer(
-        element_count=num_blocks, resource_type_layout=compress_3P_kernel.reflection.g_diagnostics,
+        element_count=num_blocks, resource_type_layout=reflection.g_diagnostics,
         usage=spy.BufferUsage.unordered_access
     )
 
     astc_3p_4x4_lut_s3_buffer = device.create_buffer(
         element_count=len(astc_lut.astc_3p_4x4_lut_s3_np),
-        resource_type_layout=compress_3P_kernel.reflection.g_astc_3p_4x4_lut_s3,
+        resource_type_layout=reflection.g_astc_3p_4x4_lut_s3,
         usage=spy.BufferUsage.shader_resource,
         data=astc_lut.astc_3p_4x4_lut_s3_np
     )
 
     astc_2p_4x4_lut_s2_buffer = device.create_buffer(
         element_count=len(astc_lut.astc_2p_4x4_lut_s2_np),
-        resource_type_layout=compress_3P_kernel.reflection.g_astc_2p_4x4_lut_s2,
+        resource_type_layout=reflection.g_astc_2p_4x4_lut_s2,
         usage=spy.BufferUsage.shader_resource,
         data=astc_lut.astc_2p_4x4_lut_s2_np
     )
@@ -194,6 +201,8 @@ def main(args):
             "snap": bool(not args.no_snap),
             "max_partitions": 3 if args.use_3p else (2 if args.use_2p else 1),
             "debug_reconstruction": args.debug_reconstruction,
+            "debug_quant": args.debug_quant,
+            "debug_loss": args.debug_loss,
             "exact_steps": args.exact_steps,
             "use_pca": args.use_pca,
             "seed": args.seed,
@@ -229,6 +238,14 @@ def main(args):
             for c in partition_count.T[i]:
                 histogram[c-1] += 1
             print(f"  Histogram of partitions used: {histogram}")
+            delta1 = diagnostics['delta1'].T[i]
+            print(f"  [line 1] Mean spread: {np.sqrt((delta1.T ** 2).sum(1)).mean():.3f}")
+            delta2 = diagnostics['delta2'].T[i]
+            print(f"  [line 2] Mean spread: {np.sqrt((delta2.T ** 2).sum(1)).mean():.3f}")
+            delta3 = diagnostics['delta3'].T[i]
+            print(f"  [line 3] Mean spread: {np.sqrt((delta3.T ** 2).sum(1)).mean():.3f}")
+            # print(delta1)
+
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
@@ -251,6 +268,11 @@ def main(args):
         print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
         print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
         print(f"Mean predicted vs best color quantization method error: {(((np.log2(wc.T[1]) - np.log2(fwc.T[1])) ** 2) ** 0.5).mean():0.3} bits")
+        color_ranges = collections.defaultdict(int)
+        for color_range in wc.T[1]:
+            color_ranges[int(color_range)] += 1
+        print(f"Color mode quantization histogram: {sorted(color_ranges.items())}")
+    
 
     reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)
@@ -263,7 +285,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_2p", action="store_true", help="Use the 2-partition compressor instead of the default 1-partition.")
     parser.add_argument("--use_3p", action="store_true", help="Use the 3-partition compressor instead of the default 1-partition.")
     parser.add_argument("--lr", type=float, default=0.1, help="Learning rate for gradient descent.")
-    parser.add_argument("--m", type=int, default=100, help="Number of gradient descent steps per dispatch.")
+    parser.add_argument("--m", type=int, default=20, help="Number of gradient descent steps per dispatch.")
     parser.add_argument("--snap_steps", type=int, default=0, help="Frequency of snapping partitions to valid ASTC maps (for 2P mode).")
     parser.add_argument("--no_snap", action="store_true", help="Don't snap to astc valid patterns")
     parser.add_argument("--debug_reconstruction", action="store_true", help="Use debug output for reconstruction")
@@ -271,6 +293,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_pca", action="store_true", help="Use PCA instead of AABB")
     parser.add_argument("--seed", type=int, default=0, help="Use PRNG seed (default 0)")
     parser.add_argument("--no_quantization", action="store_true", help="Don't quantize the image to a valid astc mode")
+    parser.add_argument("--debug_quant", action="store_true", help="Use debug output for reconstruction")
+    parser.add_argument("--debug_loss", action="store_true", help="Use debug output for loss")
 
 
     args = parser.parse_args()
