@@ -82,21 +82,21 @@ def main(args):
     texture_block_dtype = np.dtype([('pixels', (np.float32, (16, 3)))])
     diagnostics_dtype = np.dtype([
         ('partition_hamming_error', np.uint32),
-        ('loss_log', (np.float32, 20)),
+        ('loss_log', (np.float32, (12, 3))),
         ('start_clock', (np.uint64, 1)), # optim_ended_clock, finished_clock
         ('optim_ended_clock', (np.uint64, 1)),
         ('finished_clock', (np.uint64, 1)),
-        ('timestamps', (np.uint64, 20)),
-        ('partition_hamming_error_log', (np.uint32, 20)),
-        ('ideal_partition_log', (np.uint32, 20)),
-        ('partition_count', (np.uint32, 20)),
+        ('timestamps', (np.uint64, 12)),
+        ('partition_hamming_error_log', (np.uint32, 12)),
+        ('ideal_partition_log', (np.uint32, 12)),
+        ('partition_count', (np.uint32, 12)),
         ('final_unquantized_loss', np.float32),
-        ('delta1', (np.float32, (3, 20))),
-        ('delta2', (np.float32, (3, 20))),
-        ('delta3', (np.float32, (3, 20))),
-        ('color_mean1', (np.float32, (3, 20))),
-        ('color_mean2', (np.float32, (3, 20))),
-        ('color_mean3', (np.float32, (3, 20))),
+        # ('delta1', (np.float32, (3, 10))),
+        # ('delta2', (np.float32, (3, 10))),
+        # ('delta3', (np.float32, (3, 10))),
+        # ('color_mean1', (np.float32, (3, 10))),
+        # ('color_mean2', (np.float32, (3, 10))),
+        # ('color_mean3', (np.float32, (3, 10))),
     ])
 
     comp_block_dtype_3P = np.dtype([
@@ -134,30 +134,22 @@ def main(args):
     )
 
     initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
-    # initial_params_3p_struct['ep0'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['ep1'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['ep2'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['ep3'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['ep4'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['ep5'] = np.random.rand(num_blocks, 3)
-    # initial_params_3p_struct['weights'] = np.random.rand(num_blocks, 16)
-    # initial_params_3p_struct['partition_logits'] = (np.random.rand(num_blocks, 16) * 2) # Center around 1
-    compressed_3P_buffer = device.create_buffer(
+    compressed_block_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock3P,
         usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.uint8)
     )
 
-    final_loss_buffer = device.create_buffer(
+    loss_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_final_loss,
         usage=spy.BufferUsage.unordered_access
     )
 
-    final_reconstructed_buffer = device.create_buffer(
+    reconstructed_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_reconstructed,
         usage=spy.BufferUsage.unordered_access
     )
 
-    final_diagnostics_buffer = device.create_buffer(
+    diagnostics_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_diagnostics,
         usage=spy.BufferUsage.unordered_access
     )
@@ -176,17 +168,16 @@ def main(args):
         data=astc_lut.astc_2p_4x4_lut_s2_np
     )
 
+    if args.ensemble:
+        if not args.use_2p:
+            args.use_3p = True
+
     dispatch_vars = {
         "g_groundtruth": groundtruth_buffer,
-        # "g_compressedBlock": compressed_buffer,
-        # "g_compressedBlock2P": compressed_2P_buffer,
-        "g_compressedBlock3P": compressed_3P_buffer,
-        # "g_compress_step_params": compress_params_buffer,
-        "g_final_loss": final_loss_buffer,
-        "g_reconstructed": final_reconstructed_buffer,
-        'g_diagnostics': final_diagnostics_buffer,
-        # "g_lut_ideal_to_seed": lut_ideal_buffer,
-        # "g_lut_seed_to_mask": lut_seed_buffer,
+        "g_compressedBlock3P": compressed_block_buffer,
+        "g_final_loss": loss_buffer,
+        "g_reconstructed": reconstructed_buffer,
+        'g_diagnostics': diagnostics_buffer,
         "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
         "g_astc_2p_4x4_lut_s2": astc_2p_4x4_lut_s2_buffer,
         "g_lut": {
@@ -196,6 +187,7 @@ def main(args):
         "g_params": {
             "learning_rate": args.lr,
             "steps": args.m,
+            "steps_1p": args.steps_1p if args.steps_1p > 0 else args.m,
             "snap_steps": args.snap_steps,
             "num_blocks": num_blocks,
             "snap": bool(not args.no_snap),
@@ -204,46 +196,49 @@ def main(args):
             "debug_quant": args.debug_quant,
             "debug_loss": args.debug_loss,
             "exact_steps": args.exact_steps,
-            "use_pca": args.use_pca,
+            "use_pca": not args.use_aabb,
             "seed": args.seed,
             "no_quantization": args.no_quantization,
+            "ensemble": args.ensemble,
         }
     }
 
     grid = (num_blocks, 1, 1)
-    kernel_to_run = compress_3P_kernel if args.use_2p else compress_3P_kernel
-    if args.use_3p:
-        kernel_to_run = compress_3P_kernel
+    kernel_to_run = compress_3P_kernel
 
-    print(f"\n--- Starting {2 if args.use_2p else (3 if args.use_3p else 1)}-Partition Compression ---")
+    print(f"\n--- Starting {3 if args.use_3p else (2 if args.use_2p else 1)}-Partition Compression ---")
     print(f"Running gradient descent for {args.m} steps")
     wall_start = time.time()
     kernel_to_run.dispatch(grid, vars=dispatch_vars)
-    diagnostics = final_diagnostics_buffer.to_numpy().view(diagnostics_dtype)
+    diagnostics = diagnostics_buffer.to_numpy().view(diagnostics_dtype)
     wall_end = time.time()
-    loss_log = diagnostics['loss_log']
+    loss_log = diagnostics['loss_log'].mean(0)
+    best_loss = diagnostics['loss_log'].min(2).mean(0)
     timestamps = diagnostics['timestamps']
     thread_timestamps = (timestamps - diagnostics['start_clock']).T / 100000
     print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 100000:.2f} ms over {num_blocks} threads")
     print(f"  Wall clock: {wall_end - wall_start}")
-    for i, loss in enumerate(loss_log.mean(0)):
-        checkpoint = max(1, args.m // 20)
-        if i * checkpoint >= args.m: break
-        print(f"Step {i * checkpoint}: loss = {loss:.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
-        if args.use_2p or args.use_3p:
+    for i, loss in enumerate(loss_log):
+        checkpoint = max(1, args.m // 10)
+        if i * checkpoint >= args.m + 1: break
+        print(f"Step {i * checkpoint}: loss = {best_loss[i] if args.ensemble else loss.max():.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
+        if (args.ensemble):
+            print(f"  Ensemble 1P: {loss[0]:.4f}, 2P: {loss[1]:.4f}, 3P: {loss[2]:.4f}, Best: {best_loss[i]:.4f}")
+        if (args.use_2p or args.use_3p) and not args.ensemble:
             print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
             print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
             histogram = [0,0,0,0]
             partition_count = diagnostics['partition_count']
             for c in partition_count.T[i]:
-                histogram[c-1] += 1
+                if 1 <= c <= 3:
+                    histogram[c-1] += 1
             print(f"  Histogram of partitions used: {histogram}")
-            delta1 = diagnostics['delta1'].T[i]
-            print(f"  [line 1] Mean spread: {np.sqrt((delta1.T ** 2).sum(1)).mean():.3f}")
-            delta2 = diagnostics['delta2'].T[i]
-            print(f"  [line 2] Mean spread: {np.sqrt((delta2.T ** 2).sum(1)).mean():.3f}")
-            delta3 = diagnostics['delta3'].T[i]
-            print(f"  [line 3] Mean spread: {np.sqrt((delta3.T ** 2).sum(1)).mean():.3f}")
+            # delta1 = diagnostics['delta1'].T[i]
+            # print(f"  [line 1] Mean spread: {np.sqrt((delta1.T ** 2).sum(1)).mean():.3f}")
+            # delta2 = diagnostics['delta2'].T[i]
+            # print(f"  [line 2] Mean spread: {np.sqrt((delta2.T ** 2).sum(1)).mean():.3f}")
+            # delta3 = diagnostics['delta3'].T[i]
+            # print(f"  [line 3] Mean spread: {np.sqrt((delta3.T ** 2).sum(1)).mean():.3f}")
             # print(delta1)
 
     finished = diagnostics['finished_clock']
@@ -251,9 +246,11 @@ def main(args):
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
     if args.use_2p or args.use_3p:
         print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
-    unquantized_loss = diagnostics['final_unquantized_loss'].mean()
-    final_loss = final_loss_buffer.to_numpy().view(np.float32).mean()
+    unquantized_loss = diagnostics['final_unquantized_loss'].mean(0)
+    final_loss = loss_buffer.to_numpy().view(np.float32).mean(0)
     print(f"Final Mean L^2 Unquantized Loss per block: {unquantized_loss:.4f}")
+    if (args.ensemble):
+        print(f"  Ensemble 1P: {loss_log[-1][0]:.4f}, 2P: {loss_log[-1][1]:.4f}, 3P: {loss_log[-1][2]:.4f}, Best: {best_loss[-1]:.4f}")
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
 
     # for i in range(len(diagnostics['ideal_partition_log'])):
@@ -262,8 +259,8 @@ def main(args):
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['ideal_partition_map'])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
-    wc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
-    fwc = compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
+    wc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
+    fwc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
     if not args.no_quantization:
         print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
         print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
@@ -273,8 +270,10 @@ def main(args):
             color_ranges[int(color_range)] += 1
         print(f"Color mode quantization histogram: {sorted(color_ranges.items())}")
     
+    print(diagnostics_buffer.size, compressed_block_buffer.size, reconstructed_buffer.size)
+    
 
-    reconstructed_data = final_reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
+    reconstructed_data = reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)
 
 
@@ -290,11 +289,13 @@ if __name__ == "__main__":
     parser.add_argument("--no_snap", action="store_true", help="Don't snap to astc valid patterns")
     parser.add_argument("--debug_reconstruction", action="store_true", help="Use debug output for reconstruction")
     parser.add_argument("--exact_steps", type=int, default=0, help="Number of exact steps to run")
-    parser.add_argument("--use_pca", action="store_true", help="Use PCA instead of AABB")
+    parser.add_argument("--use_aabb", action="store_true", help="Use PCA instead of AABB")
     parser.add_argument("--seed", type=int, default=0, help="Use PRNG seed (default 0)")
     parser.add_argument("--no_quantization", action="store_true", help="Don't quantize the image to a valid astc mode")
     parser.add_argument("--debug_quant", action="store_true", help="Use debug output for reconstruction")
     parser.add_argument("--debug_loss", action="store_true", help="Use debug output for loss")
+    parser.add_argument("--ensemble", action="store_true", help="Ensemble 1P, 2P, and 3P compressors")
+    parser.add_argument("--steps_1p", type=int, default=0, help="Number of gradient descent steps for just 1P search in ensemble mode")
 
 
     args = parser.parse_args()
