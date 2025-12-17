@@ -1,9 +1,3 @@
-// See T42-Shannon-Woods-NVIDIA.pdf
-// This implements an ASTC/BC7 texture encoder (or at least their parameters)
-// by creating a differentiable decoding function (decompress), and then
-// treat the ||(decompress(params) - groundtruth)||^2 as a blackbox optimization
-// problem where we do gradient descent over.
-
 // Each ASTC/BC block is 16x vec3 of RGBs
 struct TextureBlock : IDifferentiable
 {
@@ -448,6 +442,17 @@ struct CompressedTextureBlock : IDifferentiable
     EP_PROPERTY(ep4, _ep4)
     EP_PROPERTY(ep5, _ep5)
 
+    static uint pack_partition_indices(uint partition_index[16])
+    {
+        uint raw_map = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            uint logit = clamp(partition_index[i], 0, 2);
+            raw_map |= (logit << (i * 2));
+        }
+        return raw_map;
+    }
+
     uint pack_partition_indices()
     {
         uint raw_map = 0;
@@ -527,6 +532,30 @@ struct CompressedTextureBlock : IDifferentiable
         }
     }
 
+    [mutating]
+    void set_partition_index(uint3 partition)
+    {
+        astc_seed = uint16_t(partition.x);
+        astc_partition_map = max_partitions == 2 ? LUT2_LOOKUP[astc_seed] : LUT3_LOOKUP[astc_seed];
+        var dist1 = hamming_distance_2b(ideal_partition_map, astc_partition_map);
+        var dist2 = hamming_distance_2b(permute_swap01(ideal_partition_map), astc_partition_map);
+        var dist3 = hamming_distance_2b(permute_swap02(ideal_partition_map), astc_partition_map);
+        var dist4 = hamming_distance_2b(permute_swap12(ideal_partition_map), astc_partition_map);
+        var dist5 = hamming_distance_2b(permute_cycle_120(ideal_partition_map), astc_partition_map);
+        var dist6 = hamming_distance_2b(permute_cycle_201(ideal_partition_map), astc_partition_map);
+        var min01 = min(dist1, dist2);
+        var min23 = min(dist3, dist4);
+        var min45 = min(dist5, dist6);
+        var min0123 = min(min01, min23);
+        var min012345 = min(min0123, min45);
+        perm = uint8_t(min012345);
+
+        for (int i = 0; i < 16; i++)
+        {
+            partition_index[i] = ((partition.y >> (2 * i)) & 3);
+        }
+    }
+
     static float distSq(float3 P, float3 L, float pDotL, float invLenSq)
     {
         float pDotP = dot(P, P);
@@ -566,71 +595,209 @@ struct CompressedTextureBlock : IDifferentiable
         }
     }
 
-    [mutating]
-    uint solve_partition(TextureBlock groundtruth)
-    {
-        var L1 = ep1 - ep0;
-        var L2 = ep3 - ep2;
-        var L3 = ep5 - ep4;
-        float invLenSq1 = 1.0 / (dot(L1, L1) + 1e-6f);
-        float invLenSq2 = 1.0 / (dot(L2, L2) + 1e-6f);
-        float invLenSq3 = 1.0 / (dot(L3, L3) + 1e-6f);
-        uint partitions = 0;
-        for (int i = 0; i < 16; i++)
-        {
-            var C = groundtruth.pixels[i];
-            var P1 = C - ep0;
-            var P2 = C - ep2;
-            var P3 = C - ep4;
-            var pDotL1 = dot(P1, L1);
-            var pDotL2 = dot(P2, L2);
-            var pDotL3 = dot(P3, L3);
-            var d1 = distSq(P1, L1, pDotL1, invLenSq1);
-            var d2 = distSq(P2, L2, pDotL2, invLenSq2);
-            var d3 = max_partitions == 3 ? distSq(P3, L3, pDotL3, invLenSq3) : 1000.0;
-            var p = argmin(d1, d2, d3);
-            partition_index[i] = p;
-            partitions |= (1 << p);
+    // ASTCENC magic numbers for weighted-random center selection
+    static const float kClusterCutoffs[9] = {
+        0.626220, 0.932770, 0.275454,
+        0.318558, 0.240113, 0.009190,
+        0.347661, 0.731960, 0.156391
+    };
 
-            // Project the weights since it's pretty much free
-            var pDotL = p == 0 ? pDotL1 : (p == 1 ? pDotL2 : pDotL3);
-            var invLenSq = p == 0 ? invLenSq1 : (p == 1 ? invLenSq2 : invLenSq3);
-            var w = pDotL * invLenSq;
-            weights[i] = saturate(w);
+    void cluster_astc(TextureBlock groundtruth, inout uint partition_index[16])
+    {
+        float3 centroids[4];
+        uint k = max_partitions;
+        PCG32 prng = PCG32(g_params.seed);
+
+        [unroll]
+        for (int iter = 0; iter < 3; iter++)
+        {
+            if (iter == 0)
+            {
+                // Initialize the first centroid by picking a random sample
+                centroids[0] = groundtruth.pixels[prng.nextUint() % 16];
+                float dists[16];
+                [unroll]
+                for (int t = 0; t < 16; t++)
+                {
+                    var d = groundtruth.pixels[t] - centroids[0];
+                    dists[t] = dot(d, d);
+                }
+
+                // Select the secondary centroids
+                [unroll]
+                for (uint c = 1; c < k; c++)
+                {
+                    float total_dist = 0;
+                    [unroll]
+                    for (int t1 = 0; t1 < 16; t1++)
+                        total_dist += dists[t1];
+
+                    uint cutoff_idx = (c - 1) + 3 * (k - 2);
+                    float dist_cutoff = total_dist * kClusterCutoffs[cutoff_idx];
+
+                    float running_sum = 0;
+                    uint selected_sample = 0;
+
+                    [unroll]
+                    for (uint sample = 0; sample < 16; sample++)
+                    {
+                        running_sum += dists[sample];
+                        if (running_sum >= dist_cutoff)
+                        {
+                            selected_sample = sample;
+                            break;
+                        }
+                    }
+
+                    centroids[c] = groundtruth.pixels[selected_sample];
+
+                    [unroll]
+                    for (int t2 = 0; t2 < 16; t2++)
+                    {
+                        var d = groundtruth.pixels[t2] - centroids[c];
+                        dists[t2] = min(dists[t2], dot(d, d));
+                    }
+                }
+            }
+            else
+            {
+                float3 color_sums[4] = { float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0), float3(0, 0, 0) };
+                uint counts[4] = { 0, 0, 0, 0 };
+
+                [unroll]
+                for (int i = 0; i < 16; i++)
+                {
+                    uint p_idx = partition_index[i];
+                    color_sums[p_idx] += groundtruth.pixels[i];
+                    counts[p_idx]++;
+                }
+
+                [unroll]
+                for (uint j = 0; j < k; j++)
+                {
+                    if (counts[j] > 0)
+                    {
+                        centroids[j] = color_sums[j] / float(counts[j]);
+                    }
+                    else
+                    {
+                        centroids[j] = float3(0, 0, 0);
+                    }
+                }
+            }
+
+            uint partition_counts[4] = { 0, 0, 0, 0 };
+            [unroll]
+            for (int i = 0; i < 16; i++)
+            {
+                float best_dist = 1e3;
+                uint best_idx = 0;
+
+                [unroll]
+                for (uint j = 0; j < k; j++)
+                {
+                    float d = dot(groundtruth.pixels[i] - centroids[j], groundtruth.pixels[i] - centroids[j]);
+                    if (d < best_dist)
+                    {
+                        best_dist = d;
+                        best_idx = j;
+                    }
+                }
+                partition_index[i] = best_idx;
+                partition_counts[best_idx]++;
+            }
+
+            // Restart empty partitions
+            bool problem = true;
+            [unroll]
+            for (int safe_iter = 0; safe_iter < 4; safe_iter++)
+            {
+                if (!problem)
+                    break;
+                problem = false;
+
+                [unroll]
+                for (uint p = 0; p < k; p++)
+                {
+                    if (partition_counts[p] == 0)
+                    {
+                        // Pixel stealing
+                        uint old_p = partition_index[prng.nextUint() % 16];
+                        if (old_p != p)
+                        {
+                            partition_counts[old_p]--;
+                            partition_counts[p]++;
+                            partition_index[p] = p;
+                            problem = true;
+                        }
+                    }
+                }
+            }
         }
-        return partitions;
     }
 
     [mutating]
-    void one_step_solve_partition(TextureBlock groundtruth, bool should_snap)
+    int solve_partitions(TextureBlock groundtruth, out uint3 partitions[], uint candidates)
     {
-        if (max_partitions == 1)
+        uint partition_index[16];
+        cluster_astc(groundtruth, partition_index);
+
+        var raw_map = pack_partition_indices(partition_index);
+        ideal_partition_map = raw_map;
+        uint seen[32];
+        uint histogram[8][32]; // seed bitmask of min(dist) mod permutations (up to 8 dist away)
+        for (int i = 1; i < 1024; i++)
         {
-            solve_weights(groundtruth);
-            return;
+            if ((seen[i / 32] & (1 << (i % 32))) != 0)
+            {
+                continue;
+            }
+            seen[i / 32] |= (1 << (i % 32));
+            Permutation permutation = Id;
+            var final_map = max_partitions == 2 ? LUT2_LOOKUP[i] : LUT3_LOOKUP[i];
+            var perm_distance = max_partitions == 2 ? best_perm_distance_s2(raw_map, final_map, permutation)
+                                                    : best_perm_distance_s3(raw_map, final_map, permutation);
+            if (perm_distance < 8)
+            {
+                histogram[perm_distance][i / 32] |= (1 << (i % 32));
+            }
         }
-        // Assume that the color endpoints are already solved
-        uint partitions = solve_partition(groundtruth);
-        // "Scramble" any blocks that settle onto the single-partition basin
-        // This is our poor man's gradient restart :)
-        bool single_partition = max_partitions > 1 && (partitions == 1 || partitions == 2 || partitions == 4);
-        if (should_snap || single_partition)
+
+        uint found = 0;
+        for (int dist = 0; dist < 8; dist++)
         {
-            snap();
-            // Project weights again
-            solve_weights(groundtruth);
+            [unroll]
+            for (int j = 0; j < 32; j++)
+            {
+                [unroll]
+                for (int k = 0; k < 32; k++)
+                {
+                    if ((histogram[dist][j] & (1 << k)) > 0)
+                    {
+                        var seed = j * 32 + k;
+                        var final_map = max_partitions == 2 ? LUT2_LOOKUP[seed] : LUT3_LOOKUP[seed];
+                        partitions[found] = uint3(seed, final_map, dist);
+                        found++;
+
+                        if (found >= candidates)
+                        {
+                            return found;
+                        }
+                    }
+                }
+            }
         }
+        return found;
     }
 
-    [Differentiable]
     TextureBlock decompress3P()
     {
         TextureBlock outputBlock;
         [unroll]
         for (uint i = 0; i < 16; i++)
         {
-            var w = detach(weights[i]);
-            var partition = clamp(int(detach(partition_index[i])), 0, max_partitions - 1);
+            var w = weights[i];
+            var partition = clamp(int(partition_index[i]), 0, max_partitions - 1);
             var e0 = partition == 0 ? ep0 : (partition == 1 ? ep2 : ep4);
             var e1 = partition == 0 ? ep1 : (partition == 1 ? ep3 : ep5);
             outputBlock.pixels[i] = lerp(e0, e1, w);
@@ -721,30 +888,6 @@ struct CompressedTextureBlock : IDifferentiable
         }
     }
 
-    vector<uint8_t, 2> fast_quantize(TextureBlock groundtruth)
-    {
-        // Statistical estimator for ideal color ep quantization
-        float A = ((max_partitions == 1) ? 111 : 99) / 16;
-        float B = 6 * max_partitions / 16;
-        var Delta = (dot(abs(ep1 - ep0), 1) + dot(abs(ep3 - ep2), 1) + dot(abs(ep5 - ep4), 1)) / 9 + 1e-6;
-        var K = 1 + 4 * weights.mean() / 3;
-        var Qc = pow(2, clamp((A + log2(K / (B * Delta))) / (1 + B), 1, 8)) - 1;
-
-        vector<uint8_t, 2> best_wc;
-        for (int i = 0; i < 9; i++)
-        {
-            vector<uint8_t, 2> wc = max_partitions == 1
-                                        ? VALID_1P_QUANTIZATION_RANGES[i]
-                                        : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
-            if (wc.y == 0)
-                continue;
-            if (Qc < wc.y)
-                break;
-            best_wc = wc;
-        }
-        return best_wc;
-    }
-
     [mutating]
     vector<uint8_t, 2> quantize(TextureBlock groundtruth)
     {
@@ -770,7 +913,7 @@ struct CompressedTextureBlock : IDifferentiable
             block._ep5 = quantize(_ep5, c);
             block.weights.quantize(wc.x);
 
-            var loss = loss_3P(groundtruth, block);
+            var loss = loss_mse(groundtruth, block);
             if (loss < best_loss || i == 0)
             {
                 best_loss = loss;
@@ -780,7 +923,6 @@ struct CompressedTextureBlock : IDifferentiable
         }
         this = best_block;
         this.qwc = best_wc;
-        this.fqwc = fast_quantize(groundtruth);
         return best_wc;
     }
 
@@ -968,7 +1110,7 @@ bool solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 
     if (count == 1)
     {
         let new_ep0 = centroid;
-        let new_ep1 = sample_color(centroid, groundtruth);
+        let new_ep1 = centroid;
         bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
         return true;
     }
@@ -994,7 +1136,7 @@ bool solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 
         // In this specific case, we need to push the pattern away from a single solid color
         // Gradient descent is great at this, but it's very slow
         let new_ep0 = centroid;
-        let new_ep1 = sample_color(centroid, groundtruth);
+        let new_ep1 = centroid;
         bound_and_damp(new_ep0, new_ep1, ep0, ep1, lr);
         return false;
     }
@@ -1042,23 +1184,7 @@ bool solve_pca_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 
     return true;
 }
 
-void solve_aabb_eps(CompressedTextureBlock block, inout float3 ep0, inout float3 ep1, TextureBlock groundtruth, int partition_id)
-{
-    float3 min_ep = 1, max_ep = 0;
-    [unroll]
-    for (int i = 0; i < 16; i++)
-    {
-        bool inlier = block.partition_index[i] == partition_id;
-        min_ep = min(inlier ? groundtruth.pixels[i] : 1, min_ep);
-        max_ep = max(inlier ? groundtruth.pixels[i] : 0, max_ep);
-    }
-
-    ep0 = saturate(min_ep);
-    ep1 = saturate(max_ep);
-}
-
-[Differentiable]
-float loss_3P(
+float loss_mse(
     no_diff TextureBlock groundtruth, // frozen
     CompressedTextureBlock compressed)
 {
@@ -1081,102 +1207,71 @@ float dist(float3 x, float3 ep0, float3 ep1)
     return length(cross(pointVec, lineDir)) / length(lineDir);
 }
 
-float optimize(inout CompressedTextureBlock block, TextureBlock groundtruth, uint steps, bool diagnostics_enabled, inout Diagnostics diagnostics, uint exact_steps = 0)
+float optimize(inout CompressedTextureBlock block, TextureBlock groundtruth, uint steps, bool diagnostics_enabled, inout Diagnostics diagnostics)
 {
     float lr = g_params.learning_rate;
-    exact_steps = exact_steps == 0 ? g_params.exact_steps : exact_steps;
-    uint first_lsq_step = 0; // Debugging
-    bool can_snap = g_params.snap > 0;
-    uint first_snap_step = g_params.snap_steps == 0 ? uint(steps * 0.5) : steps - g_params.snap_steps;
     uint max_partitions = block.max_partitions;
 
     Permutation perm = Id;
-    uint checkpoint = max(1, steps / 10);
-    if (diagnostics_enabled)
-    {
-        diagnostics.loss_log[0][max_partitions - 1] = loss_3P(groundtruth, block);
-    }
-    for (int step = 0; step < steps; step++)
-    {
-        // Coordinate descent: gradient optimize ep, one-step solve partition
-        bool should_use_lsq = exact_steps > 0 && (step >= first_lsq_step) && (step <= first_lsq_step + exact_steps);
-        if (should_use_lsq)
-        {
-            // "Exact" approximate solve_pca_eps vs solve_aabb_eps
-            // Note that the exact solves tend to get stuck in local optimums that even the gradient
-            // optimizer can't climb out of. In some problems, reaches the local optimum faster
-            if (g_params.use_pca)
-            {
-                solve_pca_eps(block, block.ep0, block.ep1, groundtruth, 0);
-                solve_pca_eps(block, block.ep2, block.ep3, groundtruth, 1);
-                solve_pca_eps(block, block.ep4, block.ep5, groundtruth, 2);
-            }
-            else
-            {
-                solve_aabb_eps(block, block.ep0, block.ep1, groundtruth, 0);
-                solve_aabb_eps(block, block.ep2, block.ep3, groundtruth, 1);
-                solve_aabb_eps(block, block.ep4, block.ep5, groundtruth, 2);
-            }
-        }
-        else
-        {
-            // Backprop on the color eps
-            // Generally reaches the optimum ~ same
-            DifferentialPair<CompressedTextureBlock> cb_pair = diffPair(block);
-            bwd_diff(loss_3P)(groundtruth, cb_pair, 1.0f);
-            CompressedTextureBlock.Differential gradient = cb_pair.d;
-            block.ep0 = saturate(block.ep0 - gradient._ep0 * lr);
-            block.ep1 = saturate(block.ep1 - gradient._ep1 * lr);
-            if (max_partitions >= 2)
-            {
-                block.ep2 = saturate(block.ep2 - gradient._ep2 * lr);
-                block.ep3 = saturate(block.ep3 - gradient._ep3 * lr);
-            }
-            if (max_partitions == 3)
-            {
-                block.ep4 = saturate(block.ep4 - gradient._ep4 * lr);
-                block.ep5 = saturate(block.ep5 - gradient._ep5 * lr);
-            }
-        }
-        // One-step solve the partition
-        block.one_step_solve_partition(groundtruth, can_snap && (step >= first_snap_step || step >= steps - 1));
+    // if (diagnostics_enabled)
+    // {
+    //     diagnostics.loss_log[0][max_partitions - 1] = loss_mse(groundtruth, block);
+    // }
 
-        if (diagnostics_enabled && step % checkpoint == 0)
+#define N 50
+    uint3 partitions[N];
+    uint found = 1;
+    if (max_partitions > 1)
+        found = block.solve_partitions(groundtruth, partitions, N);
+    float losses[N];
+
+    float best_loss = 1000;
+    var best_block : CompressedTextureBlock;
+    uint best_candidate_id = 0;
+    for (int candidate_id = 0; candidate_id < min(found, N); candidate_id++)
+    {
+        var current_block = block;
+        if (max_partitions > 1)
         {
-            uint iter = step / checkpoint + 1;
+            current_block.set_partition_index(partitions[candidate_id]);
+        }
+        solve_pca_eps(current_block, current_block.ep0, current_block.ep1, groundtruth, 0);
+        // if (max_partitions > 1)
+        solve_pca_eps(current_block, current_block.ep2, current_block.ep3, groundtruth, 1);
+        // if (max_partitions > 2)
+        solve_pca_eps(current_block, current_block.ep4, current_block.ep5, groundtruth, 2);
+        current_block.solve_weights(groundtruth);
+        float loss = loss_mse(groundtruth, current_block);
+        losses[candidate_id] = loss;
+
+        if (diagnostics_enabled && candidate_id < 10)
+        {
+            uint iter = candidate_id;
             diagnostics.timestamps[iter] = getRealtimeClock();
-            diagnostics.loss_log[iter][max_partitions - 1] = loss_3P(groundtruth, block);
-
-            uint pattern = block.pack_partition_indices();
-            uint final_mask = 0;
-            uint2 closest_seed = max_partitions == 3
-                                     ? get_closest_seed3(pattern, perm, final_mask)
-                                     : get_closest_seed2(pattern, perm, final_mask);
-            diagnostics.partition_hamming_error_log[iter] = max_partitions == 3
-                                                                ? best_perm_distance_s3(pattern, final_mask, perm)
-                                                                : best_perm_distance_s2(pattern, final_mask, perm);
-            diagnostics.ideal_partition_log[iter] = pattern;
-
-            uint p0 = hamming_distance_2b(pattern, 0) < 16;
-            uint p1 = hamming_distance_2b(pattern, 0x55555555) < 16;
-            uint p2 = hamming_distance_2b(pattern, 0xaaaaaaaa) < 16;
-            diagnostics.partition_count[iter] = p0 + p1 + p2;
-
-            // diagnostics.delta1[iter] = (block.ep1 - block.ep0);
-            // diagnostics.delta2[iter] = (block.ep3 - block.ep2);
-            // diagnostics.delta3[iter] = (block.ep5 - block.ep4);
-            // diagnostics.color_mean1[iter] = block.ep0;
-            // diagnostics.color_mean2[iter] = block.ep2;
-            // diagnostics.color_mean3[iter] = block.ep4;
+            diagnostics.loss_log[iter][max_partitions - 1] = loss;
         }
+
+        if (loss < best_loss)
+        {
+            best_loss = loss;
+            best_block = current_block;
+            best_candidate_id = candidate_id;
+        }
+
+        // We don't need to optimize partitions for 1P
+        // if (max_partitions == 1)
+        //     break;
     }
 
-    float loss = loss_3P(groundtruth, block);
+    // float loss = loss_mse(groundtruth, best_block);
     if (diagnostics_enabled)
     {
-        diagnostics.loss_log[11][max_partitions - 1] = loss;
+        diagnostics.loss_log[11][max_partitions - 1] = best_loss;
     }
-    return loss;
+
+    block = best_block;
+    block.astc_seed = uint16_t(best_candidate_id);
+    return best_loss;
 }
 
 // [require(spvShaderClockKHR)]
@@ -1195,6 +1290,8 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupTh
     var prng = PCG32(g_params.seed);
     CompressedTextureBlock block = g_compressedBlock3P[blockIdx];
     block.max_partitions = g_params.max_partitions;
+    // block.random_initialize(groundtruth, prng);
+    // block.solve_weights(groundtruth);
 
     var block1 = block;
     var block2 = block;
@@ -1202,31 +1299,33 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupTh
     float loss1 = 0;
     float loss2 = 0;
     float loss3 = 0;
+    float loss = 0;
 
     uint steps = g_params.steps;
     if (g_params.ensemble)
     {
         prng = PCG32(g_params.seed);
         block1.max_partitions = 1;
-        block1.random_initialize(groundtruth, prng);
-        uint exact_1p_steps = g_params.steps_1p == g_params.steps ? 0 : g_params.steps_1p;
-        loss1 = optimize(block1, groundtruth, g_params.steps_1p, true, g_diagnostics[blockIdx], exact_1p_steps);
+        // block1.random_initialize(groundtruth, prng);
+        loss1 = optimize(block1, groundtruth, g_params.steps_1p, true, g_diagnostics[blockIdx]);
+
         prng = PCG32(g_params.seed);
         block2.max_partitions = 2;
-        block2.random_initialize(groundtruth, prng);
+        // block2.random_initialize(groundtruth, prng);
         loss2 = optimize(block2, groundtruth, steps, true, g_diagnostics[blockIdx]);
+
         prng = PCG32(g_params.seed);
         if (g_params.max_partitions == 3)
         {
             block3.max_partitions = 3;
-            block3.random_initialize(groundtruth, prng);
+            // block3.random_initialize(groundtruth, prng);
             loss3 = optimize(block3, groundtruth, steps, true, g_diagnostics[blockIdx]);
         }
     }
     else
     {
-        block.random_initialize(groundtruth, prng);
-        optimize(block, groundtruth, steps, true, g_diagnostics[blockIdx]);
+        // block.random_initialize(groundtruth, prng);
+        loss = optimize(block, groundtruth, steps, true, g_diagnostics[blockIdx]);
     }
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
@@ -1237,14 +1336,14 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupTh
         if (g_params.ensemble)
         {
             block1.quantize(groundtruth);
-            float quantized_loss1 = loss_3P(groundtruth, block1);
+            float quantized_loss1 = loss_mse(groundtruth, block1);
             block2.quantize(groundtruth);
-            float quantized_loss2 = loss_3P(groundtruth, block2);
+            float quantized_loss2 = loss_mse(groundtruth, block2);
             float quantized_loss3 = 1000;
             if (g_params.max_partitions == 3)
             {
                 block3.quantize(groundtruth);
-                quantized_loss3 = loss_3P(groundtruth, block3);
+                quantized_loss3 = loss_mse(groundtruth, block3);
             }
             if (quantized_loss3 < quantized_loss2 && quantized_loss3 < quantized_loss1)
             {
@@ -1267,14 +1366,14 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupTh
         }
         else
         {
-            g_diagnostics[blockIdx].final_unquantized_loss = loss_3P(groundtruth, block);
+            g_diagnostics[blockIdx].final_unquantized_loss = loss;
             block.quantize(groundtruth);
-            final_loss = loss_3P(groundtruth, block);
+            final_loss = loss_mse(groundtruth, block);
         }
     }
     else
     {
-        final_loss = loss_3P(groundtruth, block);
+        final_loss = loss_mse(groundtruth, block);
     }
     g_compressedBlock3P[blockIdx] = block;
     g_reconstructed[blockIdx] = block.reconstruct(groundtruth);
@@ -1285,9 +1384,9 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID, uint3 groupTh
 
 // [shader("compute")]
 // [numthreads(64, 1, 1)]
-// void get_loss_3P(uint3 dispatchThreadID : SV_DispatchThreadID)
+// void get_loss_mse(uint3 dispatchThreadID : SV_DispatchThreadID)
 // {
 //     uint blockIdx = dispatchThreadID.x;
 //     if (blockIdx >= g_params.num_blocks) return;
-//     g_final_loss[blockIdx] = loss_3P(g_groundtruth[blockIdx], g_compressedBlock3P[blockIdx]);
+//     g_final_loss[blockIdx] = loss_mse(g_groundtruth[blockIdx], g_compressedBlock3P[blockIdx]);
 // }

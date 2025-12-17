@@ -78,6 +78,9 @@ def main(args):
 
     compress_3P_program = device.load_program("astc_encoder3_soft.slang", ["compress_3P_step"])
     compress_3P_kernel = device.create_compute_kernel(compress_3P_program)
+
+    compress_hard_program = device.load_program("astc_encoder_hard.slang", ["compress_3P_step"])
+    compress_hard_kernel = device.create_compute_kernel(compress_hard_program)
     
     texture_block_dtype = np.dtype([('pixels', (np.float32, (16, 3)))])
     diagnostics_dtype = np.dtype([
@@ -114,16 +117,6 @@ def main(args):
         ('wc', (np.uint8, 2)),
         ('fwc', (np.uint8, 2)),
         ('padding', (np.uint8, 3)),
-    ])
-
-    params_dtype = np.dtype([
-        ('learning_rate', np.float32),
-        ('steps', np.uint32),
-        ('snap_steps', np.uint32),
-        ('num_blocks', np.uint32),
-        ('snap', np.uint32),
-        ('max_partitions', np.uint8),
-        ('seed', np.uint32),
     ])
 
     reflection = compress_3P_kernel.reflection
@@ -204,7 +197,7 @@ def main(args):
     }
 
     grid = (num_blocks, 1, 1)
-    kernel_to_run = compress_3P_kernel
+    kernel_to_run = compress_3P_kernel if not args.hard else compress_hard_kernel
 
     print(f"\n--- Starting {3 if args.use_3p else (2 if args.use_2p else 1)}-Partition Compression ---")
     print(f"Running gradient descent for {args.m} steps")
@@ -224,15 +217,15 @@ def main(args):
         print(f"Step {i * checkpoint}: loss = {best_loss[i] if args.ensemble else loss.max():.4f} ({thread_timestamps[i].mean():0.2f} ms/thread mean, {thread_timestamps[i].min():0.2f} ms / {thread_timestamps[i].max():0.2f} ms)")
         if (args.ensemble):
             print(f"  Ensemble 1P: {loss[0]:.4f}, 2P: {loss[1]:.4f}, 3P: {loss[2]:.4f}, Best: {best_loss[i]:.4f}")
-        if (args.use_2p or args.use_3p) and not args.ensemble:
-            print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
-            print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
-            histogram = [0,0,0,0]
-            partition_count = diagnostics['partition_count']
-            for c in partition_count.T[i]:
-                if 1 <= c <= 3:
-                    histogram[c-1] += 1
-            print(f"  Histogram of partitions used: {histogram}")
+        # if (args.use_2p or args.use_3p) and not args.ensemble:
+        #     print(f"  Partition hamming error at step {i}: {diagnostics['partition_hamming_error_log'].sum(0)[i]}")
+        #     print(f"  Mask: {diagnostics['ideal_partition_log'][0][i]:032b}")
+        #     histogram = [0,0,0,0]
+        #     partition_count = diagnostics['partition_count']
+        #     for c in partition_count.T[i]:
+        #         if 1 <= c <= 3:
+        #             histogram[c-1] += 1
+        #     print(f"  Histogram of partitions used: {histogram}")
             # delta1 = diagnostics['delta1'].T[i]
             # print(f"  [line 1] Mean spread: {np.sqrt((delta1.T ** 2).sum(1)).mean():.3f}")
             # delta2 = diagnostics['delta2'].T[i]
@@ -244,17 +237,22 @@ def main(args):
     finished = diagnostics['finished_clock']
     optim_ended = diagnostics['optim_ended_clock']
     print(f" + diagnostics overhead per thread: {(finished - optim_ended).mean() / 100000:.5f} ms / {(finished - optim_ended).min() / 100000:.5f} ms / {(finished - optim_ended).max() / 100000:.5f} ms")
-    if args.use_2p or args.use_3p:
-        print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
+    # if args.use_2p or args.use_3p:
+    #     print(f"Partition hamming error: {diagnostics['partition_hamming_error'].mean()}")
     unquantized_loss = diagnostics['final_unquantized_loss'].mean(0)
     # final loss is the sum of 16 pixels' MSEs (of 3 components each - RGB)
     final_loss = loss_buffer.to_numpy().view(np.float32).mean(0)
     print(f"Final Mean L^2 Unquantized Loss per block: {unquantized_loss:.4f}")
-    if (args.ensemble):
-        print(f"  Ensemble 1P: {loss_log[-1][0]:.4f}, 2P: {loss_log[-1][1]:.4f}, 3P: {loss_log[-1][2]:.4f}, Best: {best_loss[-1]:.4f}")
+    # if (args.ensemble):
+    print(f"  Ensemble 1P: {loss_log[-1][0]:.4f}, 2P: {loss_log[-1][1]:.4f}, 3P: {loss_log[-1][2]:.4f}, Best: {best_loss[-1]:.4f}")
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
     print(f"Final PSNR: {10 * np.log10(1 / (final_loss / 16 / 3)):.4f} dB")
 
+    print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
+    print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
+    print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm']))
+    print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed']))
+    # print(diagnostics['loss_log'][:,-1,2])
     # for i in range(len(diagnostics['ideal_partition_log'])):
     #     print(i, diagnostics['ideal_partition_log'][i][19])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_partition_map'])
@@ -262,11 +260,11 @@ def main(args):
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
     wc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
-    fwc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
+    # fwc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
     if not args.no_quantization:
         print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
         print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
-        print(f"Mean predicted vs best color quantization method error: {(((np.log2(wc.T[1]) - np.log2(fwc.T[1])) ** 2) ** 0.5).mean():0.3} bits")
+        # print(f"Mean predicted vs best color quantization method error: {(((np.log2(wc.T[1]) - np.log2(fwc.T[1])) ** 2) ** 0.5).mean():0.3} bits")
         color_ranges = collections.defaultdict(int)
         for color_range in wc.T[1]:
             color_ranges[int(color_range)] += 1
@@ -298,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("--debug_loss", action="store_true", help="Use debug output for loss")
     parser.add_argument("--ensemble", action="store_true", help="Ensemble 1P, 2P, and 3P compressors")
     parser.add_argument("--steps_1p", type=int, default=0, help="Number of gradient descent steps for just 1P search in ensemble mode")
+    parser.add_argument("--hard", action="store_true", help="Use hard mode")
 
 
     args = parser.parse_args()
