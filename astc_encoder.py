@@ -142,9 +142,10 @@ def main(args):
         usage=spy.BufferUsage.unordered_access
     )
 
+    initial_diagnostics_struct = np.zeros(num_blocks, dtype=diagnostics_dtype)
     diagnostics_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_diagnostics,
-        usage=spy.BufferUsage.unordered_access
+        usage=spy.BufferUsage.unordered_access, data=initial_diagnostics_struct.view(np.uint8)
     )
 
     astc_3p_4x4_lut_s3_buffer = device.create_buffer(
@@ -193,6 +194,7 @@ def main(args):
             "seed": args.seed,
             "no_quantization": args.no_quantization,
             "ensemble": args.ensemble,
+            "exhaustive": args.exhaustive,
         }
     }
 
@@ -248,10 +250,14 @@ def main(args):
     print(f"Final Mean L^2 Loss per block: {final_loss:.4f}")
     print(f"Final PSNR: {10 * np.log10(1 / (final_loss / 16 / 3)):.4f} dB")
 
-    print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
-    print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
-    print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm']))
-    print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed']))
+    # print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm'])
+    # print(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
+    # print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['perm']))
+    # print(np.histogram(compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed']))
+
+    # print(diagnostics['partition_count'][:,-1]) # Number of skips
+    # print(diagnostics['partition_count'][:,-1].mean())
+    # print(diagnostics['partition_count'][:,-2]) # First skip
     # print(diagnostics['loss_log'][:,-1,2])
     # for i in range(len(diagnostics['ideal_partition_log'])):
     #     print(i, diagnostics['ideal_partition_log'][i][19])
@@ -297,7 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--ensemble", action="store_true", help="Ensemble 1P, 2P, and 3P compressors")
     parser.add_argument("--steps_1p", type=int, default=0, help="Number of gradient descent steps for just 1P search in ensemble mode")
     parser.add_argument("--hard", action="store_true", help="Use hard mode")
-
+    parser.add_argument("--exhaustive", action="store_true", help="Use exhaustive search")
 
     args = parser.parse_args()
     main(args)
