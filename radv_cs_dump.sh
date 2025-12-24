@@ -1,0 +1,1 @@
+ACO_DEBUG=liveinfo RADV_DEBUG=cs time uv run python astc_encoder.py --hard -o test.png hard_hi.png --ensemble --m 64 --use_2p 2> radv_cs_dump.txt

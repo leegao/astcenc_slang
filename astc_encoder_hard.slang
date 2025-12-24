@@ -53,8 +53,6 @@ ConstantBuffer<Params> g_params;
 // The image to encode (or to compute the loss of)
 StructuredBuffer<TextureBlock> g_groundtruth;
 
-#define groundtruth g_groundtruth[blockIdx]
-
 // The reconstructed image
 RWStructuredBuffer<TextureBlock> g_reconstructed;
 
@@ -90,20 +88,16 @@ struct Scratch
 
 RWStructuredBuffer<Scratch> g_scratch;
 
-static const vector<uint8_t, 2> VALID_1P_QUANTIZATION_RANGES[9] = {
+static const uint8_t2 VALID_1P_QUANTIZATION_RANGES[5] = {
     // w, c
     { 31, 31 },  // (5b, 5b)
     { 23, 63 },  // (1t3b, 6b)
     { 19, 95 },  // (1q2b, 1t5b)
     { 15, 191 }, // (4b, 1t6b)
     { 11, 255 }, // (1t2b, 8b)
-    { 0, 0 },    // Padding
-    { 0, 0 },    // Padding
-    { 0, 0 },    // Padding
-    { 0, 0 },    // Padding
 };
 
-static const vector<uint8_t, 2> VALID_2P_QUANTIZATION_RANGES[9] = {
+static const uint8_t2 VALID_2P_QUANTIZATION_RANGES[9] = {
     // w, c
     { 15, 5 }, // (4b, 1t1b)
     { 11, 9 }, // (1t2b, 1q1b)
@@ -116,7 +110,7 @@ static const vector<uint8_t, 2> VALID_2P_QUANTIZATION_RANGES[9] = {
     { 1, 95 }, // (1b, 1t5b)
 };
 
-static const vector<uint8_t, 2> VALID_3P_QUANTIZATION_RANGES[9] = {
+static const uint8_t2 VALID_3P_QUANTIZATION_RANGES[6] = {
     // w, c
     { 7, 5 },  // (3b, 1t1b)
     { 5, 7 },  // (1t1b, 3b)
@@ -124,16 +118,13 @@ static const vector<uint8_t, 2> VALID_3P_QUANTIZATION_RANGES[9] = {
     { 3, 11 }, // (2b, 1t2b)
     { 2, 15 }, // (1t, 4b)
     { 1, 23 }, // (1b, 1t3b)
-    { 0, 0 },  // Padding
-    { 0, 0 },  // Padding
-    { 0, 0 },  // Padding
 };
 
-public struct PCG32
+struct PCG32
 {
     uint state;
 
-    public __init(uint seed)
+    __init(uint seed)
     {
         this.state = seed * 747796405u + 2891336453u;
         this.state = ((this.state >> ((this.state >> 28u) + 4u)) ^ this.state) * 277803737u;
@@ -141,14 +132,14 @@ public struct PCG32
     }
 
     [mutating]
-    public float nextFloat()
+    float nextFloat()
     {
         uint result = this.nextUint();
         return asfloat(0x3F800000u | (result >> 9)) - 1.0f;
     }
 
     [mutating]
-    public uint nextUint()
+    uint nextUint()
     {
         uint oldState = this.state;
         this.state = oldState * 747796405u + 2891336453u;
@@ -246,7 +237,6 @@ struct BF8Weights
 
     [mutating] void quantize(uint8_t range = 255)
     {
-        [unroll]
         for (int i = 0; i < 16; i++)
         {
             this[i] = quantize(this[i], range);
@@ -268,6 +258,22 @@ struct PartitionMap
     }
 }
 
+// #define STATIC_GROUND_TRUTH
+#define GLOBAL_GROUND_TRUTH
+
+#ifdef STATIC_GROUND_TRUTH
+static TextureBlock my_groundtruth;
+#define groundtruth my_groundtruth
+#else
+#ifdef GLOBAL_GROUND_TRUTH
+#define groundtruth g_groundtruth[blockIdx]
+#else
+#define SHARED_GROUND_TRUTH
+groupshared TextureBlock s_groundtruth[64];
+#define groundtruth s_groundtruth[blockIdx % 64]
+#endif
+#endif
+
 struct SharedScratchPad
 {
     CompressedTextureBlockPayload blocks[2];
@@ -283,20 +289,47 @@ struct SharedScratchPad
 //         s_scratch[blockIdx % 64].blocks[i - 1].f = v;
 #define SCRATCH_BLOCKS(i) g_scratch[blockIdx].blocks[i]
 #define SET_SCRATCH_BLOCKS(i, f, v) g_scratch[blockIdx].blocks[i].f = v
+// #define SCRATCH_BLOCKS(i) s_scratch[blockIdx % 64].blocks[i]
+// #define SET_SCRATCH_BLOCKS(i, f, v) s_scratch[blockIdx % 64].blocks[i].f = v
 
-struct CompressedTextureBlockPayload
+interface ICompressedTextureBlockPayload
+{
+#define PROPERTY(name, T) property T name { get; set; }
+
+    PROPERTY(_ep0, uint8_t3)
+    PROPERTY(_ep1, uint8_t3)
+    PROPERTY(_ep2, uint8_t3)
+    PROPERTY(_ep3, uint8_t3)
+    PROPERTY(_ep4, uint8_t3)
+    PROPERTY(_ep5, uint8_t3)
+    PROPERTY(qwc, uint8_t2)
+    PROPERTY(weights, BF8Weights)
+    PROPERTY(partition_map, PartitionMap)
+    PROPERTY(ideal_partition_map, PartitionMap)
+    PROPERTY(astc_seed, uint16_t)
+    PROPERTY(perm, uint8_t)
+    PROPERTY(max_partitions, uint8_t)
+
+    [mutating]
+    void set(CompressedTextureBlockProxyPayload other);
+    [mutating]
+    void set(CompressedTextureBlockPayload other);
+#undef PROPERTY
+}
+
+struct CompressedTextureBlockPayload : ICompressedTextureBlockPayload
 {
     uint8_t perm;
-    vector<uint8_t, 3> _ep0, _ep1; // partition 1
-    vector<uint8_t, 3> _ep2, _ep3; // partition 2
-    vector<uint8_t, 3> _ep4, _ep5; // partition 2
+    uint8_t3 _ep0, _ep1; // partition 1
+    uint8_t3 _ep2, _ep3; // partition 2
+    uint8_t3 _ep4, _ep5; // partition 2
 
     BF8Weights weights;         // we don't have to gradient descent on this since we can do a full solve
     PartitionMap partition_map; // Partition blend logits
     PartitionMap ideal_partition_map;
     uint16_t astc_seed;
     uint8_t max_partitions;
-    vector<uint8_t, 2> qwc;
+    uint8_t2 qwc;
 
     [mutating]
     void set(CompressedTextureBlockPayload other)
@@ -307,41 +340,15 @@ struct CompressedTextureBlockPayload
     [mutating]
     void set(CompressedTextureBlockProxyPayload other)
     {
-        // var other_index = other.index;
-        this = true ? SCRATCH_BLOCKS(other.index)
-                    : g_compressedBlock3P[blockIdx];
+        this = SCRATCH_BLOCKS(other.index);
     }
 }
 
-struct CompressedTextureBlockProxyPayload
+struct CompressedTextureBlockProxyPayload : ICompressedTextureBlockPayload
 {
     int8_t index;
-#define GET_FIELD(f) true ? SCRATCH_BLOCKS(index).f : g_compressedBlock3P[blockIdx].f
-#define SET_FIELD(f)                            \
-    if (true)                                   \
-    {                                           \
-        SET_SCRATCH_BLOCKS(index, f, newValue); \
-    }                                           \
-    else                                        \
-        g_compressedBlock3P[blockIdx].f = newValue;
-#define EP_PROPERTY(f, n)         \
-    property vector<uint8_t, n> f \
-    {                             \
-        get {                     \
-            return GET_FIELD(f);  \
-        }                         \
-        set {                     \
-            SET_FIELD(f);         \
-        }                         \
-    }
-    EP_PROPERTY(_ep0, 3)
-    EP_PROPERTY(_ep1, 3)
-    EP_PROPERTY(_ep2, 3)
-    EP_PROPERTY(_ep3, 3)
-    EP_PROPERTY(_ep4, 3)
-    EP_PROPERTY(_ep5, 3)
-    EP_PROPERTY(qwc, 2)
-#undef EP_PROPERTY
+#define GET_FIELD(f) SCRATCH_BLOCKS(index).f
+#define SET_FIELD(f) SET_SCRATCH_BLOCKS(index, f, newValue)
 #define PROPERTY(f, T)           \
     property T f                 \
     {                            \
@@ -352,6 +359,13 @@ struct CompressedTextureBlockProxyPayload
             SET_FIELD(f);        \
         }                        \
     }
+    PROPERTY(_ep0, uint8_t3)
+    PROPERTY(_ep1, uint8_t3)
+    PROPERTY(_ep2, uint8_t3)
+    PROPERTY(_ep3, uint8_t3)
+    PROPERTY(_ep4, uint8_t3)
+    PROPERTY(_ep5, uint8_t3)
+    PROPERTY(qwc, uint8_t2)
     PROPERTY(weights, BF8Weights)
     PROPERTY(partition_map, PartitionMap)
     PROPERTY(ideal_partition_map, PartitionMap)
@@ -361,36 +375,34 @@ struct CompressedTextureBlockProxyPayload
 #undef PROPERTY
 #undef GET_FIELD
 #undef SET_FIELD
-
+    [mutating]
     void set(CompressedTextureBlockProxyPayload other)
     {
-        var other_index = other.index;
-        if (true)
-            g_scratch[blockIdx].blocks[index] =
-                true ? g_scratch[blockIdx].blocks[other_index]
-                     : g_compressedBlock3P[blockIdx];
-        else
-            g_compressedBlock3P[blockIdx] =
-                true ? g_scratch[blockIdx].blocks[other_index]
-                     : g_compressedBlock3P[blockIdx];
+        g_scratch[blockIdx].blocks[index] = g_scratch[blockIdx].blocks[other.index];
+    }
+    [mutating]
+    void set(CompressedTextureBlockPayload other)
+    {
+        g_scratch[blockIdx].blocks[index] = other;
     }
 }
 
 // The ASTC/BC encoder problem (single-partition) is to solve for
-struct CompressedTextureBlock
+struct CompressedTextureBlock<T : ICompressedTextureBlockPayload>
 {
     // CompressedTextureBlockPayload payload; // use vregs
-    CompressedTextureBlockProxyPayload payload; // use dram
+    // CompressedTextureBlockProxyPayload payload; // use dram
+    T payload;
 
-#define EP_PROPERTY(ep, _ep)                                                   \
-    property half3 ep                                                          \
-    {                                                                          \
-        get {                                                                  \
-            return half3(payload._ep) / 255;                                   \
-        }                                                                      \
-        set {                                                                  \
-            payload._ep = vector<uint8_t, 3>(round(saturate(newValue) * 255)); \
-        }                                                                      \
+#define EP_PROPERTY(ep, _ep)                                         \
+    property half3 ep                                                \
+    {                                                                \
+        get {                                                        \
+            return half3(payload._ep) / 255;                         \
+        }                                                            \
+        set {                                                        \
+            payload._ep = uint8_t3(round(saturate(newValue) * 255)); \
+        }                                                            \
     }
     EP_PROPERTY(ep0, _ep0)
     EP_PROPERTY(ep1, _ep1)
@@ -416,170 +428,42 @@ struct CompressedTextureBlock
     PROPERTY(astc_seed, uint16_t)
     PROPERTY(perm, uint8_t)
     PROPERTY(max_partitions, uint8_t)
+    PROPERTY(qwc, uint8_t2)
 #undef PROPERTY
 
     [mutating]
     void set_astc_seed(uint16_t seed)
     {
+        // Called up to 3 x (128 or 1024) times total
         astc_seed = seed;
         partition_map = max_partitions == 2 ? PartitionMap(LUT2_LOOKUP[seed]) : PartitionMap(LUT3_LOOKUP[seed]);
     }
 
-    // Cheap 1-step update to find the optimal weights that best fits ep0/ep1, ep2/ep3 to groundtruth
-    // This is a shortcut to avoid n steps of descent on weight, and avoid computing weight derivatives
     [mutating]
     void solve_weights()
     {
-        // Project weights again
-        var L1 = ep1 - ep0;
-        var L2 = ep3 - ep2;
-        var L3 = ep5 - ep4;
-        half invLenSq1 = 1.0h / (dot(L1, L1) + 0.000001h);
-        half invLenSq2 = 1.0h / (dot(L2, L2) + 0.000001h);
-        half invLenSq3 = 1.0h / (dot(L3, L3) + 0.000001h);
+        // Called up to 3 times total
+        let L1 = ep1 - ep0;
+        let L2 = ep3 - ep2;
+        let L3 = ep5 - ep4;
+        let invLenSq1 = 1.0h / (dot(L1, L1) + 0.000001h);
+        let invLenSq2 = 1.0h / (dot(L2, L2) + 0.000001h);
+        let invLenSq3 = 1.0h / (dot(L3, L3) + 0.000001h);
+        let partition_map = this.partition_map;
         for (int i = 0; i < 16; i++)
         {
-            var C = groundtruth[i];
-            var p = partition_map[i];
-            var pDotL = p == 0 ? dot(C - ep0, L1) : (p == 1 ? dot(C - ep2, L2) : dot(C - ep4, L3));
-            var invLenSq = p == 0 ? invLenSq1 : (p == 1 ? invLenSq2 : invLenSq3);
-            var w = pDotL * invLenSq;
+            let C = groundtruth[i];
+            let p = partition_map[i];
+            let pDotL = p == 0 ? dot(C - ep0, L1) : (p == 1 ? dot(C - ep2, L2) : dot(C - ep4, L3));
+            let invLenSq = p == 0 ? invLenSq1 : (p == 1 ? invLenSq2 : invLenSq3);
+            let w = pDotL * invLenSq;
             weights[i] = saturate(w);
         }
     }
 
-    // ASTCENC magic numbers for weighted-random center selection
-    static const half kClusterCutoffs[9] = {
-        0.626220h, 0.932770h, 0.275454h,
-        0.318558h, 0.240113h, 0.009190h,
-        0.347661h, 0.731960h, 0.156391h
-    };
-
-    void cluster_astc(inout PartitionMap partition_map)
+    void decompress()
     {
-        half3 centroids[4];
-        uint8_t k = max_partitions;
-        PCG32 prng = PCG32(g_params.seed);
-
-        for (int iter = 0; iter < 3; iter++)
-        {
-            if (iter == 0)
-            {
-                // Initialize the first centroid by picking a random sample
-                centroids[0] = groundtruth[8];
-                half dists[16];
-                for (int t = 0; t < 16; t++)
-                {
-                    var d = groundtruth[t] - centroids[0];
-                    dists[t] = dot(d, d);
-                }
-
-                // Select the secondary centroids
-                for (uint c = 1; c < k; c++)
-                {
-                    half total_dist = 0;
-                    for (int t1 = 0; t1 < 16; t1++)
-                        total_dist += dists[t1];
-
-                    uint cutoff_idx = (c - 1) + 3 * (k - 2);
-                    half dist_cutoff = total_dist * kClusterCutoffs[cutoff_idx];
-
-                    half running_sum = 0;
-                    uint selected_sample = 0;
-
-                    for (uint sample = 0; sample < 16; sample++)
-                    {
-                        running_sum += dists[sample];
-                        if (running_sum >= dist_cutoff)
-                        {
-                            selected_sample = sample;
-                            break;
-                        }
-                    }
-
-                    centroids[c] = groundtruth[selected_sample];
-
-                    for (int t2 = 0; t2 < 16; t2++)
-                    {
-                        var d = groundtruth[t2] - centroids[c];
-                        dists[t2] = min(dists[t2], dot(d, d));
-                    }
-                }
-            }
-            else
-            {
-                half3 color_sums[4] = { half3(0, 0, 0), half3(0, 0, 0), half3(0, 0, 0), half3(0, 0, 0) };
-                uint counts[4] = { 0, 0, 0, 0 };
-
-                for (int i = 0; i < 16; i++)
-                {
-                    uint p_idx = partition_map[i];
-                    color_sums[p_idx] += groundtruth[i];
-                    counts[p_idx]++;
-                }
-
-                for (uint j = 0; j < k; j++)
-                {
-                    if (counts[j] > 0)
-                    {
-                        centroids[j] = color_sums[j] / half(counts[j]);
-                    }
-                    else
-                    {
-                        centroids[j] = half3(0, 0, 0);
-                    }
-                }
-            }
-
-            uint partition_counts[4] = { 0, 0, 0, 0 };
-            for (int i = 0; i < 16; i++)
-            {
-                half best_dist = 1000;
-                uint8_t best_idx = 0;
-
-                for (uint8_t j = 0; j < k; j++)
-                {
-                    half d = dot(groundtruth[i] - centroids[j], groundtruth[i] - centroids[j]);
-                    if (d < best_dist)
-                    {
-                        best_dist = d;
-                        best_idx = j;
-                    }
-                }
-                partition_map[i] = best_idx;
-                partition_counts[best_idx]++;
-            }
-
-            // Restart empty partitions
-            bool problem = true;
-            for (int safe_iter = 0; safe_iter < 4; safe_iter++)
-            {
-                if (!problem)
-                    break;
-                problem = false;
-
-                for (uint8_t p = 0; p < k; p++)
-                {
-                    if (partition_counts[p] == 0)
-                    {
-                        // Pixel stealing
-                        uint old_p = partition_map[prng.nextUint() % 16];
-                        if (old_p != p)
-                        {
-                            partition_counts[old_p]--;
-                            partition_counts[p]++;
-                            partition_map[p] = p;
-                            problem = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    void decompress3P()
-    {
-        // TextureBlock outputBlock;
+        // Called once
         for (uint8_t i = 0; i < 16; i++)
         {
             let p = partition_map[i];
@@ -587,49 +471,6 @@ struct CompressedTextureBlock
             let e1 = p == 0 ? ep1 : (p == 1 ? ep3 : ep5);
             g_reconstructed[blockIdx][i] = lerp(e0, e1, weights[i]);
         }
-    }
-
-    [mutating]
-    float quantize()
-    {
-        if (g_params.no_quantization)
-        {
-            return loss_mse(this);
-        }
-        float best_loss = 1000.0;
-        vector<uint8_t, 2> best_wc;
-        CompressedTextureBlock best_block = CompressedTextureBlock(2);
-        for (int i = 0; i < 9; i++)
-        {
-            vector<uint8_t, 2> wc = max_partitions == 1
-                                        ? VALID_1P_QUANTIZATION_RANGES[i]
-                                        : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i] : VALID_3P_QUANTIZATION_RANGES[i]);
-            if (wc.x == 0)
-                continue;
-
-            // Make a copy of this block
-            let c = wc.y;
-            CompressedTextureBlock block = CompressedTextureBlock(3);
-            block.payload.set(payload);
-            block.ep0 = quantize(ep0, c);
-            block.ep1 = quantize(ep1, c);
-            block.ep2 = quantize(ep2, c);
-            block.ep3 = quantize(ep3, c);
-            block.ep4 = quantize(ep4, c);
-            block.ep5 = quantize(ep5, c);
-            block.weights.quantize(wc.x);
-
-            let loss = loss_mse(block);
-            if (loss < best_loss || i == 0)
-            {
-                best_loss = loss;
-                best_wc = wc;
-                best_block.payload.set(block.payload);
-            }
-        }
-        this.payload.set(best_block.payload);
-        this.payload.qwc = best_wc;
-        return best_loss;
     }
 
     void reconstruct()
@@ -729,14 +570,15 @@ struct CompressedTextureBlock
         //     }
         //     return outputBlock;
         // }
-        decompress3P();
+        decompress();
         return;
     }
 };
 
 // Potentially use this vs solve_aabb_for_partition
-void solve_pca_eps(CompressedTextureBlock block, inout half3 ep0, inout half3 ep1, uint8_t partition_id)
+void solve_pca_eps<T : ICompressedTextureBlockPayload>(inout CompressedTextureBlock<T> block, inout half3 ep0, inout half3 ep1, uint8_t partition_id)
 {
+    // Called up to 9 times total
     let old_ep1 = ep1;
     let old_ep0 = ep0;
     half3 axis = half3(0.17h, 0.83h, 0.38h);
@@ -821,45 +663,50 @@ void solve_pca_eps(CompressedTextureBlock block, inout half3 ep0, inout half3 ep
     ep1 = saturate(centroid + axis * (max_t));
 }
 
-float loss_mse(CompressedTextureBlock compressed)
+float loss_mse<T : ICompressedTextureBlockPayload>(CompressedTextureBlock<T> block, vector<uint8_t, 2> quant = { 255, 255 })
 {
-    compressed.decompress3P();
+    // Called up to 3 + 5 + 9 + 6 times total
     float totalError = 0.0f;
-
-    for (int i = 0; i < 16; i++)
+    let partition_map = block.partition_map;
+    for (uint8_t i = 0; i < 16; i++)
     {
-        var diff = g_reconstructed[blockIdx][i] - groundtruth[i];
-        totalError += dot(diff, diff); // L2 error
+        let p = partition_map[i];
+        let e0 = quantize(p == 0 ? block.ep0 : (p == 1 ? block.ep2 : block.ep4), quant.y);
+        let e1 = quantize(p == 0 ? block.ep1 : (p == 1 ? block.ep3 : block.ep5), quant.y);
+        var diff = lerp(e0, e1, quantize(block.weights[i], quant.x)) - groundtruth[i];
+        totalError += dot(diff, diff);
     }
-
     return totalError;
 }
 
 half estimate_partition_error_bound(half3x3 scatter_matrix)
 {
-    half total_variance = scatter_matrix[0][0] + scatter_matrix[1][1] + scatter_matrix[2][2];
-    half3 axis = half3(0.17h, 0.83h, 0.38h);
+    // Called (1 + 2 + 3) x 3 x (128 or 1024) times total
+    var total_variance = scatter_matrix[0][0] + scatter_matrix[1][1] + scatter_matrix[2][2];
+    var axis = half3(0.17h, 0.83h, 0.38h);
 
     // Two rounds of power iteration to approximate the principle component (lambda_max)
     axis = mul(scatter_matrix, axis);
     axis *= rsqrt(dot(axis, axis) + 0.000001h);
     axis = mul(scatter_matrix, axis);
     // Residue = variance - maximum lambda (from the 2 rounds of power iteration)
-    half lambda_max = sqrt(dot(axis, axis));
+    var lambda_max = sqrt(dot(axis, axis));
     return max(0.0h, total_variance - lambda_max);
 }
 
 // Scans the partition map and computes the lower bound error cheaply
-half compute_error_fast(CompressedTextureBlock block)
+half compute_error_fast<let max_partitions : int, T : ICompressedTextureBlockPayload>(CompressedTextureBlock<T> block)
 {
-    half3 means[3] = { 0 };
+    // Called up to 3 x 128 (normal) or 3 x 1024 (exhaustive) times total
+    half3 means[max_partitions] = {};
 
     // Cov x count
-    half3x3 scatters[3] = { 0 };
-    uint8_t counts[3] = { 0 };
+    half3x3 scatters[max_partitions] = {};
+    uint8_t counts[max_partitions] = {};
+    let partition_map = block.partition_map;
     for (uint8_t i = 0; i < 16; i++)
     {
-        let p = block.partition_map[i];
+        let p = partition_map[i];
         let px = groundtruth[i];
 
         means[p] += px;
@@ -871,8 +718,8 @@ half compute_error_fast(CompressedTextureBlock block)
         scatters[p][2] += px.z * px;
     }
 
-    half total_lb = 0;
-    for (uint8_t p = 0; p < block.max_partitions; p++)
+    half loss = 0;
+    for (uint8_t p = 0; p < max_partitions; p++)
     {
         if (counts[p] > 0)
         {
@@ -881,11 +728,11 @@ half compute_error_fast(CompressedTextureBlock block)
             scatters[p][0] -= (m.x / count) * m;
             scatters[p][1] -= (m.y / count) * m;
             scatters[p][2] -= (m.z / count) * m;
-            total_lb += estimate_partition_error_bound(scatters[p]);
+            loss += estimate_partition_error_bound(scatters[p]);
         }
     }
 
-    return total_lb;
+    return loss;
 }
 
 struct PartitionSet
@@ -906,128 +753,229 @@ struct PartitionSet
     }
 }
 
-#define MAX_DISTANCE 8
-#define MAX_SLOTS 16 // Reduced from 16 to 10 to get down to <8k LDS
+// #define RADV_DEBUG
 
-// groupshared uint16_t s_partitions[64][MAX_DISTANCE * MAX_SLOTS];
+#ifdef RADV_DEBUG
+#define DEBUG1(i, X) g_diagnostics[getRealtimeClockLow() % 64].partition_count[i] = ((0xCAFE0000) | ((X) & 0xFFFF))
+#define DEBUG2(i, X) g_diagnostics[getRealtimeClockLow() % 64].partition_count[i] = ((0xBABE0000) | ((X) & 0xFFFF))
+#else
+#define DEBUG1(i, X)
+#define DEBUG2(i, X)
+#endif
+#define L(X) (X << 12) | __LINE__
+
+void cluster<let max_partitions : int>(inout PartitionMap partition_map)
+{
+    DEBUG1(0, L(max_partitions));
+    half3 centroids[max_partitions];
+    uint8_t partition_counts[max_partitions];
+
+    [unroll]
+    for (uint8_t k = 0; k < max_partitions; k++)
+    {
+        centroids[k] = groundtruth[(k * 4) % 16];
+    }
+
+    for (uint8_t iter = 0; iter < 3; iter++)
+    {
+        // Reset counts
+        [unroll]
+        for (uint8_t c = 0; c < max_partitions; c++)
+            partition_counts[c] = 0;
+
+        for (uint8_t i = 0; i < 16; i++)
+        {
+            var p = groundtruth[i];
+
+            var best_dist = 1000.0h;
+            uint8_t best_centroid = 0;
+
+            // Nearest centroid through projection
+            for (uint8_t centroid = 0; centroid < max_partitions; centroid++)
+            {
+                var delta = p - centroids[centroid];
+                var d = dot(delta, delta);
+                if (d < best_dist)
+                {
+                    best_dist = d;
+                    best_centroid = centroid;
+                }
+            }
+
+            partition_map[i] = best_centroid;
+            partition_counts[best_centroid]++;
+        }
+
+        var changed_map = false;
+        for (uint8_t p = 0; p < max_partitions; p++)
+        {
+            if (partition_counts[p] == 0)
+            {
+                // Steal a pixel from another partition to restart this one
+                uint8_t steal_idx = (p * 4 + 1) % 16;
+                uint8_t victim_p = partition_map[steal_idx];
+                if (partition_counts[victim_p] > 1)
+                {
+                    partition_map[steal_idx] = p;
+                    partition_counts[p]++;
+                    partition_counts[victim_p]--;
+                    changed_map = true;
+                }
+            }
+        }
+
+        // Update centroids
+        if (iter < 2 || changed_map)
+        {
+            half3 new_sums[max_partitions] = {};
+            for (uint8_t i = 0; i < 16; i++)
+            {
+                var p = groundtruth[i];
+                var idx = partition_map[i];
+                new_sums[idx] += p;
+            }
+            for (uint8_t centroid = 0; centroid < max_partitions; centroid++)
+            {
+                var count = partition_counts[centroid];
+                if (count != 0)
+                {
+                    centroids[centroid] = new_sums[centroid] / half(count);
+                }
+            }
+        }
+    }
+
+    DEBUG2(0, L(max_partitions));
+}
+
+#define MAX_DISTANCE 8
+#define MAX_SLOTS 12 // Reduced from 16 to 12 to get down to <8k LDS
+
+// #define STATIC_RANKED_SEEDS // needs MAX_SLOTS >= 25 (256b threshold) to force register spilling to avoid vregs explosion
+// #define GLOBAL_RANKED_SEEDS
+#define SHARED_RANKED_SEEDS // needs MAX_SLOTS <= 18 (192b - 204b), otherwise the extra speculative execution scales with MAX_SLOTS
+
+#ifdef STATIC_RANKED_SEEDS
+static RankedSeeds ranked_seeds;
+#else
+#ifdef GLOBAL_RANKED_SEEDS
+#define ranked_seeds g_scratch[blockIdx].ranked_seeds
+#else
 groupshared RankedSeeds s_ranked_seeds[64];
-// #define partitions s_partitions[blockIdx % 64]
-#define partitions g_scratch[blockIdx].partitions
 #define ranked_seeds s_ranked_seeds[blockIdx % 64]
-// #define ranked_seeds g_scratch[blockIdx].ranked_seeds
+#endif
+#endif
+
+#define PACKED_SEEDS_MASKS
 
 struct RankedSeeds
 {
-    // For some reason, if seeds/seeds_mask are not > 256 bytes, the shader performance suffers...
-    // Likely due to VGPRs, which are inefficient to dynamically index as I am doing here
-    // Ironically, using the L1/L2 cache here (the spilled memory) actually helps performance considerably
-    // By forcing the masks to be at least 256 bytes, we trick the compiler into using the L1/L2 cache
-    // and increase occupancy by reducing register pressure.
-    // uint16_t seeds[MAX_DISTANCE * MAX_SLOTS]; // [dist][seeds] - up to 128 entries, use MAX_SLOTS >= 17
-    uint seeds_masks[(MAX_DISTANCE * MAX_SLOTS + 2) / 3]; // 10 bits packed into 32 bits, use MAX_SLOTS >= 25
-    uint8_t counts[MAX_DISTANCE];
+#ifndef PACKED_SEEDS_MASKS
+    uint16_t seeds_masks[MAX_DISTANCE * MAX_SLOTS];
+#define RANKSEEDS_GET(seeds, n) seeds.seeds_masks[n]
+#define RANKSEEDS_ADD(seeds, n, v) seeds.seeds_masks[n] = v
+#else
+    uint seeds_masks[(MAX_DISTANCE * MAX_SLOTS + 2) / 3]; // 10 bits packed into 32 bits
+#define RANKSEEDS_GET(seeds, n) uint16_t(seeds.seeds_masks[n / 3] >> uint((n % 3) * 10)) & 0x3FF
+#define RANKSEEDS_ADD(seeds, n, v) seeds.seeds_masks[n / 3] |= uint(v) << uint((n % 3) * 10)
+#endif
 }
 
-#define RANKSEEDS_GET(seeds, n) \
-    uint16_t(seeds.seeds_masks[n / 3] >> uint((n % 3) * 10)) & 0x3FF;
-// return seeds[n];
-
-[mutating]
-void RankedSeeds_add(uint16_t seed, uint16_t distance, uint8_t slots)
+bool RankedSeeds_add(uint16_t seed, uint16_t distance, uint8_t slots, inout uint8_t counts[MAX_DISTANCE])
 {
-    var count = ranked_seeds.counts[distance];
+    let count = counts[distance];
     if (count < slots)
     {
         let n = distance * MAX_SLOTS + count;
-        // seeds[n] = seed + 1;
-        ranked_seeds.seeds_masks[n / 3] |= uint(seed + 1) << uint((n % 3) * 10);
-        ranked_seeds.counts[distance]++;
+        RANKSEEDS_ADD(ranked_seeds, n, seed + 1);
+        counts[distance] = count + 1;
+        return true;
     }
+    return false;
 }
 
-uint16_t RankedSeeds_pack(uint max_items)
+int16_t RankedSeeds_next(inout uint8_t cursor)
 {
-    uint16_t count = 0;
-    let counts = ranked_seeds.counts;
-    // [unroll]
-    for (uint16_t i = 0; i < MAX_DISTANCE * MAX_SLOTS; i++)
+    for (; cursor < MAX_DISTANCE * MAX_SLOTS; cursor++)
     {
-        if (i % MAX_SLOTS > counts[i / MAX_SLOTS])
+        let seed = RANKSEEDS_GET(ranked_seeds, cursor);
+        if (seed == 0)
         {
             continue;
         }
-        var seed = RANKSEEDS_GET(ranked_seeds, i);
-        // if (seed == 0)
-        // {
-        //     continue;
-        // }
-        partitions[count] = seed - 1;
-        count++;
-        if (count >= max_items)
+        cursor++;
+        return seed - 1;
+    }
+    return -1;
+}
+
+uint8_t find_top_partitions<let max_partitions : int, T : ICompressedTextureBlockPayload>(
+    inout CompressedTextureBlock<T> block,
+    uint candidates,
+    inout uint16_t i)
+{
+    PartitionMap ideal_map;
+    let is_p2 = max_partitions == 2;
+    let slots : uint8_t = uint8_t(clamp(candidates / 8, 2, MAX_SLOTS));
+    uint8_t distances[MAX_DISTANCE] = { 0 };
+    uint8_t count = 0;
+
+    cluster<max_partitions>(ideal_map);
+
+    DEBUG1(1, L(max_partitions));
+    block.ideal_partition_map = ideal_map;
+    ranked_seeds = RankedSeeds();
+
+    for (i = 0; i < 1024; i++)
+    {
+        var final_map = is_p2 ? LUT2_LOOKUP[i] : LUT3_LOOKUP[i];
+        var dist = is_p2 ? best_perm_distance_s2(ideal_map.data, final_map)
+                         : best_perm_distance_s3(ideal_map.data, final_map);
+        if (dist < MAX_DISTANCE)
         {
-            break;
+            count += RankedSeeds_add(i, uint8_t(dist), slots, distances);
+            if (count >= MAX_SLOTS * MAX_DISTANCE)
+            {
+                break;
+            }
         }
     }
+
+    DEBUG2(1, L(max_partitions));
     return count;
 }
 
-int find_top_partitions(inout CompressedTextureBlock block, uint candidates)
-{
-    PartitionMap ideal_map;
-    block.cluster_astc(ideal_map);
-    block.ideal_partition_map = ideal_map;
-    let slots : uint8_t = uint8_t(clamp(candidates / 8, 2, MAX_SLOTS));
-    ranked_seeds = RankedSeeds();
-    let p2 = block.max_partitions == 2;
-
-    for (uint16_t i = 0; i < 1024; i++)
-    {
-        var final_map = p2 ? LUT2_LOOKUP[i] : LUT3_LOOKUP[i];
-        var perm_distance = p2 ? best_perm_distance_s2(ideal_map.data, final_map)
-                               : best_perm_distance_s3(ideal_map.data, final_map);
-        if (perm_distance < MAX_DISTANCE)
-        {
-            RankedSeeds_add(i, uint8_t(perm_distance), slots);
-        }
-    }
-
-    return RankedSeeds_pack(candidates);
-}
-
-float optimize(inout CompressedTextureBlock block, uint steps, bool diagnostics_enabled, bool exhaustive = false)
-{
 #define diagnostics g_diagnostics[blockIdx]
-    let max_partitions = block.max_partitions;
-
-    // uint16_t partitions[MAX_DISTANCE * MAX_SLOTS] = { 0 };
-    uint candidates = 0;
-    if (exhaustive)
-    {
-        // TODO: scale down to only the LUT / S2 or S3 partitions (~400)
-        candidates = max_partitions == 1 ? 1 : steps;
-    }
-    else if (max_partitions > 1)
+float optimize<let max_partitions : int, T : ICompressedTextureBlockPayload>(
+    inout CompressedTextureBlock<T> block,
+    uint steps,
+    bool diagnostics_enabled,
+    bool exhaustive = false)
+{
+    // Called up to 3 times total
+    var candidates = max_partitions == 1 ? 0 : steps;
+    uint16_t max_seeds_checked = 0;
+    uint8_t nearest_neighbors = 0;
+    if ((!exhaustive) && max_partitions > 1)
     {
         // This is ~100ms on cat.jpg (129600 threads)
-        // partitions = { 0 };
-        candidates = find_top_partitions(block, steps);
+        nearest_neighbors = find_top_partitions<max_partitions>(block, steps, max_seeds_checked);
     }
 
     float best_loss = 1000;
     uint16_t best_candidate_id = 0;
     uint16_t best_seed = 0;
-    PCG32 prng = PCG32(0);
+    uint8_t cursor = 0;
 
     // Search for the best loss and parameters
+    // [loop]
     for (uint16_t candidate_id = 0; candidate_id < candidates; candidate_id++)
     {
-        // uint16_t seed = prng.nextUint() % 1024; // partitions[candidate_id];
-        uint16_t seed = exhaustive ? candidate_id : partitions[candidate_id];
-        // uint16_t seed = ranked_seeds[candidate_id];
-        // uint16_t seed = candidate_id;
+        var next_unchecked_seed = candidate_id - nearest_neighbors + max_seeds_checked;
+        int16_t seed = exhaustive ? candidate_id : (candidate_id < nearest_neighbors ? RankedSeeds_next(cursor) : next_unchecked_seed);
         block.set_astc_seed(seed);
+        float loss = compute_error_fast<max_partitions>(block);
 
-        float loss = compute_error_fast(block);
         if (loss < best_loss)
         {
             best_loss = loss;
@@ -1042,8 +990,6 @@ float optimize(inout CompressedTextureBlock block, uint steps, bool diagnostics_
         }
     }
 
-    // best_candidate_id = found - 1;
-    // best_seed = partitions[best_candidate_id];
     if (max_partitions > 1)
     {
         block.set_astc_seed(best_seed);
@@ -1054,26 +1000,64 @@ float optimize(inout CompressedTextureBlock block, uint steps, bool diagnostics_
     if (max_partitions > 2)
         solve_pca_eps(block, block.ep4, block.ep5, 2);
     block.solve_weights();
-    float loss = loss_mse(block);
-    if (diagnostics_enabled)
-    {
-        diagnostics.loss_log[11][max_partitions - 1] = loss;
-    }
 
-    block.astc_seed = best_candidate_id;
-    block.perm = block.max_partitions == 2 ? best_perm_distance_s2(block.ideal_partition_map.data, block.partition_map.data)
-                                           : best_perm_distance_s3(block.ideal_partition_map.data, block.partition_map.data);
+    float loss = best_loss;
+    // if (diagnostics_enabled)
+    // {
+    //     loss = loss_mse(block);
+    //     diagnostics.loss_log[11][max_partitions - 1] = loss;
+    // }
+
+    // block.astc_seed = best_candidate_id;
+
+    // block.perm = max_partitions == 2 ? best_perm_distance_s2(block.ideal_partition_map.data, block.partition_map.data)
+    //                                  : best_perm_distance_s3(block.ideal_partition_map.data, block.partition_map.data);
     return loss;
 }
 
 // #undef groundtruth
 #undef diagnostics
-#undef partitions
+// #undef partitions
 
 static uint blockIdx; // the dedicated register for the block index
 
+float find_best_quantization<let max_partitions : int, T : ICompressedTextureBlockPayload>(
+    inout CompressedTextureBlock<T> block)
+{
+    // Called up to 3 times total
+    if (g_params.no_quantization)
+    {
+        block.payload.qwc = { 255, 255 };
+        return loss_mse(block);
+    }
+
+    float best_loss = 1000.0;
+    uint8_t2 best_wc;
+    let steps = max_partitions == 1 ? 5 : (max_partitions == 2 ? 9 : 6);
+    for (uint8_t i = 0; i < steps; i++)
+    {
+        var wc = max_partitions == 1
+                     ? VALID_1P_QUANTIZATION_RANGES[i]
+                     : (max_partitions == 2 ? VALID_2P_QUANTIZATION_RANGES[i]
+                                            : VALID_3P_QUANTIZATION_RANGES[i]);
+        if (wc.x == 0)
+            continue;
+
+        let loss = loss_mse(block, wc);
+        if (loss < best_loss || i == 0)
+        {
+            best_loss = loss;
+            best_wc = wc;
+        }
+    }
+    block.payload.qwc = best_wc;
+    return best_loss;
+}
+
 // [require(spvShaderClockKHR)]
+
 [shader("compute")]
+// [amd_waves_per_eu(4, 8)]
 [numthreads(64, 1, 1)]
 void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
@@ -1082,9 +1066,15 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
         return;
     g_diagnostics[blockIdx].start_clock = getRealtimeClock();
 
+#ifdef STATIC_GROUND_TRUTH
+    my_groundtruth = g_groundtruth[blockIdx];
+#endif
+#ifdef SHARED_GROUND_TRUTH
+    groundtruth = g_groundtruth[blockIdx];
+#endif
+
     var prng = PCG32(g_params.seed);
-    var block = CompressedTextureBlock(0);
-    var block1 = CompressedTextureBlock(1);
+    var block = CompressedTextureBlock<CompressedTextureBlockProxyPayload>(0);
     float unquantized_loss = 1000.0f;
     float quantized_loss = 1000.0f;
 
@@ -1113,35 +1103,48 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
 
     float unquantized_loss1, quantized_loss1;
     block.max_partitions = 1;
-    unquantized_loss = optimize(block, steps, diagnostics);
-    quantized_loss = block.quantize();
+    unquantized_loss = optimize<1>(block, steps, diagnostics);
+    quantized_loss = find_best_quantization<1>(block);
     if (g_params.max_partitions >= 2)
     {
-        // 1P does not need exhaustive search
+        var block1 = CompressedTextureBlock<CompressedTextureBlockProxyPayload>(1);
         block1.max_partitions = 2;
-        unquantized_loss1 = optimize(block1, steps, diagnostics, exhaustive);
-        quantized_loss1 = block1.quantize();
+        unquantized_loss1 = optimize<2>(block1, steps, diagnostics, exhaustive);
+        quantized_loss1 = find_best_quantization<2>(block1);
         if (quantized_loss1 < quantized_loss)
         {
             quantized_loss = quantized_loss1;
             unquantized_loss = unquantized_loss1;
-            block.payload.set(block1.payload);
+            var tmp = block;
+            block = block1;
+            block1 = tmp;
         }
         if (g_params.max_partitions == 3)
         {
             block1.max_partitions = 3;
-            unquantized_loss1 = optimize(block1, steps, diagnostics, exhaustive);
-            quantized_loss1 = block1.quantize();
+            unquantized_loss1 = optimize<3>(block1, steps, diagnostics, exhaustive);
+            quantized_loss1 = find_best_quantization<3>(block1);
             if (quantized_loss1 < quantized_loss)
             {
                 quantized_loss = quantized_loss1;
                 unquantized_loss = unquantized_loss1;
-                block.payload.set(block1.payload);
+                var tmp = block;
+                block = block1;
+                block1 = tmp;
             }
         }
     }
 
     g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
+
+    let best_wc = block.payload.qwc;
+    block.ep0 = quantize(block.ep0, best_wc.y);
+    block.ep1 = quantize(block.ep1, best_wc.y);
+    block.ep2 = quantize(block.ep2, best_wc.y);
+    block.ep3 = quantize(block.ep3, best_wc.y);
+    block.ep4 = quantize(block.ep4, best_wc.y);
+    block.ep5 = quantize(block.ep5, best_wc.y);
+    block.weights.quantize(best_wc.x);
 
     block.reconstruct();
     g_compressedBlock3P[blockIdx].set(block.payload);

@@ -311,6 +311,9 @@ def main(args):
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
     wc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
     # fwc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
+
+    # print(diagnostics['loss_log'][:,0,2])
+
     if not args.no_quantization:
         print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
         print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
