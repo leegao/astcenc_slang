@@ -14,6 +14,8 @@ class AstcPartitionLut:
         self.device = device
         self.lut2 = np.fromfile("lut2_packed.bin", dtype=np.uint32).astype(np.uint32)
         self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
+        self.canonical_seeds2 = np.fromfile("astc_canonical_seeds_2p.bin", dtype=np.uint16).astype(np.uint16)
+        self.canonical_seeds3 = np.fromfile("astc_canonical_seeds_3p.bin", dtype=np.uint16).astype(np.uint16)
         self.astc_3p_4x4_lut_s3_np = np.fromfile("astc_3p_4x4_lut_s3.bin", dtype=np.uint32).astype(np.uint32)
         self.astc_2p_4x4_lut_s2_np = np.fromfile("astc_2p_4x4_lut_s2.bin", dtype=np.uint32).astype(np.uint32)
 
@@ -192,11 +194,11 @@ def main(args):
     ])
 
     scratch_dtype = np.dtype([
-        ('partitions', (np.uint16, 256)),
+        # ('partitions', (np.uint16, 256)),
         ('block1', comp_block_dtype_3P),
         ('block2', comp_block_dtype_3P),
-        ('block3', comp_block_dtype_3P),
-        ('block4', comp_block_dtype_3P),
+        # ('block3', comp_block_dtype_3P),
+        # ('block4', comp_block_dtype_3P),
         # ('ranked_seeds', ranked_seeds_dtype),
     ])
     scratch_data = np.zeros(num_blocks, dtype=scratch_dtype)
@@ -221,6 +223,8 @@ def main(args):
         "g_lut": {
             "lut2": astc_lut.lut2,
             "lut3": astc_lut.lut3,
+            "canonical_seeds2": astc_lut.canonical_seeds2,
+            "canonical_seeds3": astc_lut.canonical_seeds3,
         },
         "g_params": {
             "learning_rate": args.lr,

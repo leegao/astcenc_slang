@@ -73,6 +73,8 @@ struct LUT
 {
     uint lut2[1024]; // 1024-entry (4KB)
     uint lut3[1024]; // 1024-entry (4KB)
+    uint16_t canonical_seeds2[434];
+    uint16_t canonical_seeds3[491];
 };
 ConstantBuffer<LUT> g_lut;
 
@@ -81,9 +83,7 @@ ConstantBuffer<LUT> g_lut;
 
 struct Scratch
 {
-    uint16_t partitions[256];
-    CompressedTextureBlockPayload blocks[4];
-    // RankedSeeds ranked_seeds;
+    CompressedTextureBlockPayload blocks[2];
 };
 
 RWStructuredBuffer<Scratch> g_scratch;
@@ -706,7 +706,7 @@ half compute_error_fast<let max_partitions : int, T : ICompressedTextureBlockPay
     let partition_map = block.partition_map;
     for (uint8_t i = 0; i < 16; i++)
     {
-        let p = partition_map[i];
+        let p = max_partitions == 1 ? 0 : partition_map[i];
         let px = groundtruth[i];
 
         means[p] += px;
@@ -909,10 +909,15 @@ int16_t RankedSeeds_next(inout uint8_t cursor)
     return -1;
 }
 
+uint16_t get_seed<let max_partitions : int>(uint16_t candidate_id)
+{
+    let is_p2 = max_partitions == 2;
+    return is_p2 ? g_lut.canonical_seeds2[candidate_id] : g_lut.canonical_seeds3[candidate_id];
+}
+
 uint8_t find_top_partitions<let max_partitions : int, T : ICompressedTextureBlockPayload>(
     inout CompressedTextureBlock<T> block,
-    uint candidates,
-    inout uint16_t i)
+    uint candidates)
 {
     PartitionMap ideal_map;
     let is_p2 = max_partitions == 2;
@@ -925,19 +930,17 @@ uint8_t find_top_partitions<let max_partitions : int, T : ICompressedTextureBloc
     DEBUG1(1, L(max_partitions));
     block.ideal_partition_map = ideal_map;
     ranked_seeds = RankedSeeds();
+    let maximum_seeds = is_p2 ? 434 : 491;
 
-    for (i = 0; i < 1024; i++)
+    for (uint16_t i = 0; i < maximum_seeds; i++)
     {
-        var final_map = is_p2 ? LUT2_LOOKUP[i] : LUT3_LOOKUP[i];
+        var seed = get_seed<max_partitions>(i);
+        var final_map = is_p2 ? g_lut.lut2[seed] : g_lut.lut3[seed];
         var dist = is_p2 ? best_perm_distance_s2(ideal_map.data, final_map)
                          : best_perm_distance_s3(ideal_map.data, final_map);
         if (dist < MAX_DISTANCE)
         {
-            count += RankedSeeds_add(i, uint8_t(dist), slots, distances);
-            if (count >= MAX_SLOTS * MAX_DISTANCE)
-            {
-                break;
-            }
+            count += RankedSeeds_add(seed, uint8_t(dist), slots, distances);
         }
     }
 
@@ -954,25 +957,25 @@ float optimize<let max_partitions : int, T : ICompressedTextureBlockPayload>(
 {
     // Called up to 3 times total
     var candidates = max_partitions == 1 ? 0 : steps;
-    uint16_t max_seeds_checked = 0;
-    uint8_t nearest_neighbors = 0;
     if ((!exhaustive) && max_partitions > 1)
     {
         // This is ~100ms on cat.jpg (129600 threads)
-        nearest_neighbors = find_top_partitions<max_partitions>(block, steps, max_seeds_checked);
+        candidates = find_top_partitions<max_partitions>(block, steps);
+    }
+    else if (exhaustive && max_partitions > 1)
+    {
+        candidates = min(steps, max_partitions == 2 ? 434 : 491);
     }
 
-    float best_loss = 1000;
+    float best_loss = max_partitions == 1 ? compute_error_fast<max_partitions>(block) : 1000.0f;
     uint16_t best_candidate_id = 0;
     uint16_t best_seed = 0;
     uint8_t cursor = 0;
 
     // Search for the best loss and parameters
-    // [loop]
     for (uint16_t candidate_id = 0; candidate_id < candidates; candidate_id++)
     {
-        var next_unchecked_seed = candidate_id - nearest_neighbors + max_seeds_checked;
-        int16_t seed = exhaustive ? candidate_id : (candidate_id < nearest_neighbors ? RankedSeeds_next(cursor) : next_unchecked_seed);
+        int16_t seed = exhaustive ? get_seed<max_partitions>(candidate_id) : RankedSeeds_next(cursor);
         block.set_astc_seed(seed);
         float loss = compute_error_fast<max_partitions>(block);
 
@@ -986,33 +989,31 @@ float optimize<let max_partitions : int, T : ICompressedTextureBlockPayload>(
         if (diagnostics_enabled && candidate_id < 10)
         {
             diagnostics.timestamps[candidate_id] = getRealtimeClock();
-            diagnostics.loss_log[candidate_id][max_partitions - 1] = loss;
+            diagnostics.loss_log[candidate_id][max_partitions - 1] = best_loss;
         }
+    }
+
+    if (diagnostics_enabled)
+    {
+        diagnostics.loss_log[11][max_partitions - 1] = best_loss;
     }
 
     if (max_partitions > 1)
     {
         block.set_astc_seed(best_seed);
     }
+
     solve_pca_eps(block, block.ep0, block.ep1, 0);
     if (max_partitions > 1)
+    {
         solve_pca_eps(block, block.ep2, block.ep3, 1);
+    }
     if (max_partitions > 2)
+    {
         solve_pca_eps(block, block.ep4, block.ep5, 2);
+    }
     block.solve_weights();
-
-    float loss = best_loss;
-    // if (diagnostics_enabled)
-    // {
-    //     loss = loss_mse(block);
-    //     diagnostics.loss_log[11][max_partitions - 1] = loss;
-    // }
-
-    // block.astc_seed = best_candidate_id;
-
-    // block.perm = max_partitions == 2 ? best_perm_distance_s2(block.ideal_partition_map.data, block.partition_map.data)
-    //                                  : best_perm_distance_s3(block.ideal_partition_map.data, block.partition_map.data);
-    return loss;
+    return best_loss;
 }
 
 // #undef groundtruth
@@ -1079,9 +1080,7 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
     float quantized_loss = 1000.0f;
 
     let exhaustive = g_params.exhaustive;
-    // let exhaustive = false;
     let ensemble = g_params.ensemble;
-    // let ensemble = false;
     let diagnostics = true;
     let steps = g_params.steps;
 
@@ -1101,12 +1100,12 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
     //     }
     // }
 
-    float unquantized_loss1, quantized_loss1;
     block.max_partitions = 1;
     unquantized_loss = optimize<1>(block, steps, diagnostics);
     quantized_loss = find_best_quantization<1>(block);
     if (g_params.max_partitions >= 2)
     {
+        float unquantized_loss1, quantized_loss1;
         var block1 = CompressedTextureBlock<CompressedTextureBlockProxyPayload>(1);
         block1.max_partitions = 2;
         unquantized_loss1 = optimize<2>(block1, steps, diagnostics, exhaustive);
