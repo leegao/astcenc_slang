@@ -14,6 +14,8 @@ class AstcPartitionLut:
         self.device = device
         self.lut2 = np.fromfile("lut2_packed.bin", dtype=np.uint32).astype(np.uint32)
         self.lut3 = np.fromfile("lut3_packed.bin", dtype=np.uint32).astype(np.uint32)
+        self.canonical_seeds2 = np.fromfile("astc_canonical_seeds_2p.bin", dtype=np.uint16).astype(np.uint16)
+        self.canonical_seeds3 = np.fromfile("astc_canonical_seeds_3p.bin", dtype=np.uint16).astype(np.uint16)
         self.astc_3p_4x4_lut_s3_np = np.fromfile("astc_3p_4x4_lut_s3.bin", dtype=np.uint32).astype(np.uint32)
         self.astc_2p_4x4_lut_s2_np = np.fromfile("astc_2p_4x4_lut_s2.bin", dtype=np.uint32).astype(np.uint32)
 
@@ -29,7 +31,7 @@ def load_and_tile_image(image_path):
         img = np.stack([img]*3, axis=-1)
     if img.shape[2] == 4: # RGBA
         img = img[:, :, :3]
-    img = img.astype(np.float32) / 255.0
+    img = img.astype(np.uint8)
 
     h, w, c = img.shape
     
@@ -49,7 +51,7 @@ def load_and_tile_image(image_path):
     tiled = tiled.reshape(num_blocks, 16, c)
 
     print(f"Loaded '{image_path}' ({h}x{w}) -> Padded to ({ph}x{pw}) -> {num_blocks} 4x4 blocks.")
-    return tiled.astype(np.float32), (h, w), (ph, pw)
+    return tiled.astype(np.uint8), (h, w), (ph, pw)
 
 def untile_and_save_image(tiled_data, original_dims, padded_dims, output_path):
     """Reconstructs an image from tiled blocks and saves it."""
@@ -64,7 +66,7 @@ def untile_and_save_image(tiled_data, original_dims, padded_dims, output_path):
     img_transposed = img_reshaped.transpose(0, 2, 1, 3, 4)
     padded_img = img_transposed.reshape(ph, pw, c)
     final_img = padded_img[:oh, :ow, :]
-    final_img_u8 = (np.clip(final_img, 0, 1) * 255).astype(np.uint8)
+    final_img_u8 = final_img.astype(np.uint8)
     imageio.imwrite(output_path, final_img_u8)
     print(f"Saved reconstructed image to '{output_path}'")
 
@@ -72,8 +74,10 @@ def untile_and_save_image(tiled_data, original_dims, padded_dims, output_path):
 def main(args):
     groundtruth_data, orig_dims, padded_dims = load_and_tile_image(args.input)
     num_blocks = groundtruth_data.shape[0]
-
-    device = spy.Device(enable_debug_layers=False)
+    options = spy.SlangCompilerOptions()
+    options.optimization = spy.SlangOptimizationLevel.maximal
+    options.downstream_args = ["-O3"]
+    device = spy.Device(type=spy.DeviceType.vulkan, enable_debug_layers=False, compiler_options=options)
     astc_lut = AstcPartitionLut(device)
 
     compress_3P_program = device.load_program("astc_encoder3_soft.slang", ["compress_3P_step"])
@@ -82,7 +86,7 @@ def main(args):
     compress_hard_program = device.load_program("astc_encoder_hard.slang", ["compress_3P_step"])
     compress_hard_kernel = device.create_compute_kernel(compress_hard_program)
     
-    texture_block_dtype = np.dtype([('pixels', (np.float32, (16, 3)))])
+    texture_block_dtype = np.dtype([('pixels', (np.uint8, (16, 3)))])
     diagnostics_dtype = np.dtype([
         ('partition_hamming_error', np.uint32),
         ('loss_log', (np.float32, (12, 3))),
@@ -102,7 +106,23 @@ def main(args):
         # ('color_mean3', (np.float32, (3, 10))),
     ])
 
-    comp_block_dtype_3P = np.dtype([
+    hard_comp_block_dtype_3P = np.dtype([
+        ('ep0', (np.uint8, 3)), ('ep1', (np.uint8, 3)),
+        ('ep2', (np.uint8, 3)), ('ep3', (np.uint8, 3)),
+        ('ep4', (np.uint8, 3)), ('ep5', (np.uint8, 3)),
+        ('weights', (np.uint8, 16)),
+        ('astc_partition_map', np.int32),
+        # ('astc_partition_map', np.uint32),
+        ('ideal_partition_map', np.uint32),
+        ('astc_seed', np.uint16),
+        ('perm', np.uint8),
+        ('max_partitions', np.uint8),
+        ('wc', (np.uint8, 2)),
+        ('fwc', (np.uint8, 2)),
+        ('padding', (np.uint8, 2)),
+    ])
+
+    soft_comp_block_dtype_3P = np.dtype([
         ('ep0', (np.float16, 3)), ('ep1', (np.float16, 3)),
         ('ep2', (np.float16, 3)), ('ep3', (np.float16, 3)),
         ('ep4', (np.float16, 3)), ('ep5', (np.float16, 3)),
@@ -119,17 +139,21 @@ def main(args):
         ('padding', (np.uint8, 3)),
     ])
 
-    reflection = compress_3P_kernel.reflection
+    comp_block_dtype_3P = soft_comp_block_dtype_3P if not args.hard else hard_comp_block_dtype_3P
+
+    reflection_hard = compress_hard_kernel.reflection
+    reflection_soft = compress_3P_kernel.reflection
+    reflection = reflection_soft if not args.hard else reflection_hard
 
     groundtruth_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_groundtruth,
         usage=spy.BufferUsage.shader_resource, data=groundtruth_data
     )
 
-    initial_params_3p_struct = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
+    block_data = np.zeros(num_blocks, dtype=comp_block_dtype_3P)
     compressed_block_buffer = device.create_buffer(
         element_count=num_blocks, resource_type_layout=reflection.g_compressedBlock3P,
-        usage=spy.BufferUsage.unordered_access, data=initial_params_3p_struct.view(np.uint8)
+        usage=spy.BufferUsage.unordered_access, data=block_data.view(np.uint8)
     )
 
     loss_buffer = device.create_buffer(
@@ -150,16 +174,37 @@ def main(args):
 
     astc_3p_4x4_lut_s3_buffer = device.create_buffer(
         element_count=len(astc_lut.astc_3p_4x4_lut_s3_np),
-        resource_type_layout=reflection.g_astc_3p_4x4_lut_s3,
+        resource_type_layout=reflection_soft.g_astc_3p_4x4_lut_s3,
         usage=spy.BufferUsage.shader_resource,
         data=astc_lut.astc_3p_4x4_lut_s3_np
     )
 
     astc_2p_4x4_lut_s2_buffer = device.create_buffer(
         element_count=len(astc_lut.astc_2p_4x4_lut_s2_np),
-        resource_type_layout=reflection.g_astc_2p_4x4_lut_s2,
+        resource_type_layout=reflection_soft.g_astc_2p_4x4_lut_s2,
         usage=spy.BufferUsage.shader_resource,
         data=astc_lut.astc_2p_4x4_lut_s2_np
+    )
+
+    ranked_seeds_dtype = np.dtype([
+        ('slots', (np.uint8)),
+        ('seeds', (np.uint32, (8 * 10 + 2) // 3)),
+        ('counts', (np.uint8, 8)),
+        ('padding', (np.uint8, 3)),
+    ])
+
+    scratch_dtype = np.dtype([
+        # ('partitions', (np.uint16, 256)),
+        ('block1', comp_block_dtype_3P),
+        ('block2', comp_block_dtype_3P),
+        # ('block3', comp_block_dtype_3P),
+        # ('block4', comp_block_dtype_3P),
+        # ('ranked_seeds', ranked_seeds_dtype),
+    ])
+    scratch_data = np.zeros(num_blocks, dtype=scratch_dtype)
+    scratch_buffer = device.create_buffer(
+        element_count=num_blocks, resource_type_layout=compress_hard_kernel.reflection.g_scratch,
+        usage=spy.BufferUsage.unordered_access, data=scratch_data.view(np.uint8)
     )
 
     if args.ensemble:
@@ -172,11 +217,14 @@ def main(args):
         "g_final_loss": loss_buffer,
         "g_reconstructed": reconstructed_buffer,
         'g_diagnostics': diagnostics_buffer,
+        'g_scratch': scratch_buffer,
         "g_astc_3p_4x4_lut_s3": astc_3p_4x4_lut_s3_buffer,
         "g_astc_2p_4x4_lut_s2": astc_2p_4x4_lut_s2_buffer,
         "g_lut": {
             "lut2": astc_lut.lut2,
             "lut3": astc_lut.lut3,
+            "canonical_seeds2": astc_lut.canonical_seeds2,
+            "canonical_seeds3": astc_lut.canonical_seeds3,
         },
         "g_params": {
             "learning_rate": args.lr,
@@ -267,6 +315,9 @@ def main(args):
     # print(compressed_3P_buffer.to_numpy().view(comp_block_dtype_3P)['astc_seed'])
     wc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['wc']
     # fwc = compressed_block_buffer.to_numpy().view(comp_block_dtype_3P)['fwc']
+
+    # print(diagnostics['loss_log'][:,0,2])
+
     if not args.no_quantization:
         print(f"Mean color mode quantization bits: {np.log2(wc.T[1]).mean():0.3} bits / [0 .. {round(wc.T[1].mean()) - 1}] range")
         print(f"Mean weight quantization bits: {np.log2(wc.T[0]).mean():0.3} bits / [0 .. {round(wc.T[0].mean()) - 1}] range")
@@ -276,7 +327,7 @@ def main(args):
             color_ranges[int(color_range)] += 1
         print(f"Color mode quantization histogram: {sorted(color_ranges.items())}")
     
-    print(diagnostics_buffer.size, compressed_block_buffer.size, reconstructed_buffer.size)
+    print(diagnostics_buffer.size / 1024 / 1024, compressed_block_buffer.size / 1024 / 1024, reconstructed_buffer.size / 1024 / 1024, scratch_buffer.size / 1024 / 1024)
     
 
     reconstructed_data = reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
