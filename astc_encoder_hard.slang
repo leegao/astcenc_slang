@@ -1,3 +1,26 @@
+__glsl_extension(GL_EXT_shader_realtime_clock) uint2 getGlobalTimer()
+{
+    __target_switch
+    {
+    case spirv:
+        return spirv_asm
+        {
+            OpCapability ShaderClockKHR;
+            OpExtension "SPV_KHR_shader_clock";
+            result : $$uint2 = OpReadClockKHR Device; 
+        };
+
+    case glsl:
+        __intrinsic_asm "clockRealtime2x32EXT()";
+
+    default:
+        return 0;
+    }
+}
+
+// #define CLOCK getRealtimeClockLow
+#define CLOCK getGlobalTimer
+
 // Each ASTC/BC block is 16x vec3 of RGBs
 struct TextureBlock
 {
@@ -27,6 +50,7 @@ struct Diagnostics
     uint ideal_partition_log[12];
     uint partition_count[12];
     float final_unquantized_loss;
+    uint64_t execution_id;
 };
 
 struct Params
@@ -58,6 +82,8 @@ RWStructuredBuffer<TextureBlock> g_reconstructed;
 
 // Diagnostics for this run
 RWStructuredBuffer<Diagnostics> g_diagnostics;
+
+RWStructuredBuffer<uint64_t> g_global_counter;
 
 // The ASTC/BC compressed block parameters for the 2-partition problem (ep0,ep1,ep2,ep3, 16x weights, 16x partition logits)
 RWStructuredBuffer<CompressedTextureBlockPayload> g_compressedBlock3P;
@@ -756,8 +782,8 @@ struct PartitionSet
 // #define RADV_DEBUG
 
 #ifdef RADV_DEBUG
-#define DEBUG1(i, X) g_diagnostics[getRealtimeClockLow() % 64].partition_count[i] = ((0xCAFE0000) | ((X) & 0xFFFF))
-#define DEBUG2(i, X) g_diagnostics[getRealtimeClockLow() % 64].partition_count[i] = ((0xBABE0000) | ((X) & 0xFFFF))
+#define DEBUG1(i, X) g_diagnostics[CLOCK() % 64].partition_count[i] = ((0xCAFE0000) | ((X) & 0xFFFF))
+#define DEBUG2(i, X) g_diagnostics[CLOCK() % 64].partition_count[i] = ((0xBABE0000) | ((X) & 0xFFFF))
 #else
 #define DEBUG1(i, X)
 #define DEBUG2(i, X)
@@ -849,11 +875,11 @@ void cluster<let max_partitions : int>(inout PartitionMap partition_map)
 }
 
 #define MAX_DISTANCE 8
-#define MAX_SLOTS 12 // Reduced from 16 to 12 to get down to <8k LDS
+#define MAX_SLOTS 26 // Reduced from 16 to 12 to get down to <8k LDS
 
-// #define STATIC_RANKED_SEEDS // needs MAX_SLOTS >= 25 (256b threshold) to force register spilling to avoid vregs explosion
+#define STATIC_RANKED_SEEDS // needs MAX_SLOTS >= 25 (256b threshold) to force register spilling to avoid vregs explosion
 // #define GLOBAL_RANKED_SEEDS
-#define SHARED_RANKED_SEEDS // needs MAX_SLOTS <= 18 (192b - 204b), otherwise the extra speculative execution scales with MAX_SLOTS
+// #define SHARED_RANKED_SEEDS // needs MAX_SLOTS <= 18 (192b - 204b), otherwise the extra speculative execution scales with MAX_SLOTS
 
 #ifdef STATIC_RANKED_SEEDS
 static RankedSeeds ranked_seeds;
@@ -988,7 +1014,7 @@ float optimize<let max_partitions : int, T : ICompressedTextureBlockPayload>(
 
         if (diagnostics_enabled && candidate_id < 10)
         {
-            diagnostics.timestamps[candidate_id] = getRealtimeClock();
+            diagnostics.timestamps[candidate_id] = CLOCK();
             diagnostics.loss_log[candidate_id][max_partitions - 1] = best_loss;
         }
     }
@@ -1055,17 +1081,33 @@ float find_best_quantization<let max_partitions : int, T : ICompressedTextureBlo
     return best_loss;
 }
 
-// [require(spvShaderClockKHR)]
+uint64_t get_execution_id()
+{
+    uint local_id = WaveGetLaneIndex();
+    uint64_t ticket = 0;
+    if (local_id == 0)
+    {
+        InterlockedAdd(g_global_counter[0], 1, ticket);
+    }
+    var wave_ticket = WaveReadLaneFirst(ticket);
+    var execution_id = (wave_ticket * WaveGetLaneCount()) + local_id;
+    return execution_id;
+}
 
+// static uint64_t execution_id;
+
+// [require(spvShaderClockKHR)]
 [shader("compute")]
 // [amd_waves_per_eu(4, 8)]
 [numthreads(64, 1, 1)]
 void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
 {
+    var execution_id = get_execution_id();
     blockIdx = dispatchThreadID.x;
     if (blockIdx >= g_params.num_blocks)
         return;
-    g_diagnostics[blockIdx].start_clock = getRealtimeClock();
+    g_diagnostics[blockIdx].start_clock = CLOCK();
+    g_diagnostics[blockIdx].execution_id = execution_id;
 
 #ifdef STATIC_GROUND_TRUTH
     my_groundtruth = g_groundtruth[blockIdx];
@@ -1134,7 +1176,7 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
         }
     }
 
-    g_diagnostics[blockIdx].optim_ended_clock = getRealtimeClock();
+    g_diagnostics[blockIdx].optim_ended_clock = CLOCK();
 
     let best_wc = block.payload.qwc;
     block.ep0 = quantize(block.ep0, best_wc.y);
@@ -1150,5 +1192,5 @@ void compress_3P_step(uint3 dispatchThreadID: SV_DispatchThreadID)
     // g_reconstructed[blockIdx] = block.reconstruct();
     g_diagnostics[blockIdx].final_unquantized_loss = unquantized_loss;
     g_final_loss[blockIdx] = quantized_loss;
-    g_diagnostics[blockIdx].finished_clock = getRealtimeClock();
+    g_diagnostics[blockIdx].finished_clock = CLOCK();
 }

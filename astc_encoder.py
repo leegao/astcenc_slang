@@ -98,6 +98,7 @@ def main(args):
         ('ideal_partition_log', (np.uint32, 12)),
         ('partition_count', (np.uint32, 12)),
         ('final_unquantized_loss', np.float32),
+        ('execution_id', np.uint64),
         # ('delta1', (np.float32, (3, 10))),
         # ('delta2', (np.float32, (3, 10))),
         # ('delta3', (np.float32, (3, 10))),
@@ -207,6 +208,11 @@ def main(args):
         usage=spy.BufferUsage.unordered_access, data=scratch_data.view(np.uint8)
     )
 
+    global_counter = device.create_buffer(
+        element_count=1, resource_type_layout=compress_hard_kernel.reflection.g_global_counter,
+        usage=spy.BufferUsage.unordered_access, data=np.zeros(1, dtype=np.uint64)
+    )
+
     if args.ensemble:
         if not args.use_2p:
             args.use_3p = True
@@ -243,7 +249,8 @@ def main(args):
             "no_quantization": args.no_quantization,
             "ensemble": args.ensemble,
             "exhaustive": args.exhaustive,
-        }
+        },
+        "g_global_counter": global_counter,
     }
 
     grid = (num_blocks, 1, 1)
@@ -253,14 +260,17 @@ def main(args):
     print(f"Running gradient descent for {args.m} steps")
     wall_start = time.time()
     kernel_to_run.dispatch(grid, vars=dispatch_vars)
-    diagnostics = diagnostics_buffer.to_numpy().view(diagnostics_dtype)
     wall_end = time.time()
+
+    diagnostics = diagnostics_buffer.to_numpy().view(diagnostics_dtype)
     loss_log = diagnostics['loss_log'].mean(0)
     best_loss = diagnostics['loss_log'].min(2).mean(0)
     timestamps = diagnostics['timestamps']
-    thread_timestamps = (timestamps - diagnostics['start_clock']).T / 100000
-    print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / 100000:.2f} ms over {num_blocks} threads")
-    print(f"  Wall clock: {wall_end - wall_start}")
+    amd_timestamp_period = 100000
+    thread_timestamps = (timestamps - diagnostics['start_clock']).T / amd_timestamp_period
+    print(f"\nOptimization finished in {(diagnostics['finished_clock'].max() - diagnostics['start_clock'].min()) / amd_timestamp_period:.2f} ms over {num_blocks} threads")
+    print(f"Dispatch time: {(wall_end - wall_start) * 1000 : 0.2f} ms")
+    print(f"Buffer D2H time: {(time.time() - wall_end) * 1000 : 0.2f} ms")
     for i, loss in enumerate(loss_log):
         checkpoint = max(1, args.m // 10)
         if i * checkpoint >= args.m + 1: break
@@ -327,8 +337,16 @@ def main(args):
             color_ranges[int(color_range)] += 1
         print(f"Color mode quantization histogram: {sorted(color_ranges.items())}")
     
-    print(diagnostics_buffer.size / 1024 / 1024, compressed_block_buffer.size / 1024 / 1024, reconstructed_buffer.size / 1024 / 1024, scratch_buffer.size / 1024 / 1024)
-    
+    print("Buffer sizes (MB):", diagnostics_buffer.size / 1024 / 1024, compressed_block_buffer.size / 1024 / 1024, reconstructed_buffer.size / 1024 / 1024, scratch_buffer.size / 1024 / 1024)
+    execution_order = np.argsort(diagnostics['execution_id'])
+    latencies = (diagnostics['finished_clock'][execution_order] - diagnostics['start_clock'][execution_order]) / amd_timestamp_period
+    # Wave/warp size is same as our block size - 64 threads
+    print(f"Block latencies: mean {(latencies[::64, 0]).mean():.4f}, p25/50/75/90/99: {np.percentile(latencies[::64, 0], [25, 50, 75, 90, 99])}")
+    start_times = (diagnostics['start_clock'][execution_order] - diagnostics['start_clock'].min())[::64, 0] / amd_timestamp_period
+    print(f"Block start times: mean {start_times.mean():.4f}, p25/50/75/90/99: {np.percentile(start_times, [25, 50, 75, 90, 99])}")
+    print(f"Blocks in residency: {len(start_times[start_times < latencies.mean()])}")
+
+    np.save("diagnostics.npy", np.array([diagnostics['start_clock'][execution_order, 0][::64], diagnostics['finished_clock'][execution_order, 0][::64]]))
 
     reconstructed_data = reconstructed_buffer.to_numpy().view(texture_block_dtype)['pixels']
     untile_and_save_image(reconstructed_data, orig_dims, padded_dims, args.output)
